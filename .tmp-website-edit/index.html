@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Project Predictor | Musk-IT</title>
+  <meta name="description" content="Enter your project details and let our AI predict risk, timeline overruns, and key mitigation strategies.">
+  <link rel="icon" href="../images/favicon.ico">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="ai-engine-style.css">
+
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-XXXX');
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #04070f;
+      --bg2:          #080d1a;
+      --bg3:          #0c1221;
+      --surface:      #101828;
+      --surface2:     #162033;
+      --border:       rgba(255,255,255,0.07);
+      --border2:      rgba(255,255,255,0.12);
+      --accent:       #3B8BF7;
+      --accent2:      #1D5EC7;
+      --accent-glow:  rgba(59,139,247,0.18);
+      --amber:        #F5A623;
+      --teal:         #1FD9A4;
+      --text:         #F0F4FF;
+      --text2:        #8B97B4;
+      --text3:        #505D78;
+      --r:            10px;
+      --r2:           14px;
+      --font-head:    'Syne', sans-serif;
+      --font-body:    'DM Sans', sans-serif;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      font-size: 15px;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    /* ─── NAV (exact copy from homepage) ─── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      background: rgba(4,7,15,0.85);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      height: 60px;
+      display: flex; align-items: center;
+    }
+    .nav-inner {
+      max-width: 1160px; width: 100%; margin: auto;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .logo { font-family: var(--font-head); font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+    .logo span:first-child { color: var(--text); }
+    .logo span:last-child  { color: var(--accent); }
+    .nav-links { display: flex; align-items: center; gap: 4px; }
+    .nav-links a {
+      font-size: 13px; color: var(--text2);
+      padding: 6px 10px; border-radius: 6px;
+      transition: color 0.2s, background 0.2s; font-weight: 400;
+    }
+    .nav-links a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .nav-ai-active {
+      color: var(--teal) !important;
+      background: rgba(31,217,164,0.07) !important;
+      border: 1px solid rgba(31,217,164,0.2);
+      border-radius: 20px !important;
+      font-weight: 600 !important;
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .nav-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--teal); animation: pulse 2s infinite; }
+    .btn-nav {
+      background: var(--accent) !important; color: #fff !important;
+      padding: 7px 16px !important; border-radius: 7px !important;
+      font-weight: 500 !important; font-size: 13px !important; transition: opacity 0.2s !important;
+    }
+    .btn-nav:hover { opacity: 0.88 !important; }
+    .nav-toggle {
+      display: none; background: none; border: none;
+      cursor: pointer; padding: 6px; color: var(--text2);
+      flex-direction: column; gap: 5px;
+    }
+    .nav-toggle span { display: block; width: 22px; height: 2px; background: currentColor; border-radius: 2px; transition: all 0.2s; }
+
+    /* ─── HERO (same structure as homepage) ─── */
+    .hero {
+      min-height: 100vh;
+      padding: 120px 2rem 80px;
+      display: flex; align-items: center;
+      position: relative; overflow: hidden;
+    }
+    .hero-bg {
+      position: absolute; inset: 0; z-index: 0;
+      background:
+        radial-gradient(ellipse 800px 600px at 60% 30%, rgba(31,217,164,0.06) 0%, transparent 70%),
+        radial-gradient(ellipse 600px 500px at 10% 70%, rgba(59,139,247,0.07) 0%, transparent 65%);
+    }
+    .hero-grid-lines {
+      position: absolute; inset: 0; z-index: 0; opacity: 0.03;
+      background-image:
+        linear-gradient(rgba(255,255,255,1) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+    .hero-content {
+      position: relative; z-index: 1;
+      max-width: 1160px; margin: auto; width: 100%;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center;
+    }
+
+    /* Badge — teal variant to match AI theme */
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(31,217,164,0.1);
+      border: 1px solid rgba(31,217,164,0.25);
+      color: var(--teal);
+      font-size: 12px; font-weight: 500;
+      padding: 5px 14px; border-radius: 20px;
+      margin-bottom: 20px; letter-spacing: 0.3px;
+    }
+    .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); animation: pulse 2s infinite; }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+    h1 {
+      font-family: var(--font-head);
+      font-size: clamp(34px, 5vw, 58px);
+      font-weight: 800; line-height: 1.1;
+      letter-spacing: -1.5px; color: var(--text); margin-bottom: 20px;
+    }
+    h1 .highlight { color: var(--teal); }
+
+    .hero-desc {
+      font-size: 16px; color: var(--text2);
+      line-height: 1.75; max-width: 440px; margin-bottom: 32px;
+    }
+
+    .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+
+    .btn-primary {
+      background: var(--teal); color: #04070f;
+      padding: 11px 24px; border-radius: 8px;
+      font-family: var(--font-body); font-size: 14px; font-weight: 600;
+      border: none; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+    .btn-primary:hover { opacity: 0.88; transform: translateY(-1px); }
+
+    .btn-ghost {
+      background: transparent; color: var(--text2);
+      padding: 11px 20px; border-radius: 8px;
+      font-family: var(--font-body); font-size: 14px; font-weight: 500;
+      border: 1px solid var(--border2); cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s;
+    }
+    .btn-ghost:hover { color: var(--text); border-color: rgba(255,255,255,0.25); background: rgba(255,255,255,0.04); }
+
+    /* hero stat chips */
+    .hero-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+    .hero-chip {
+      font-size: 11px; font-weight: 500; color: var(--text3);
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border2);
+      padding: 4px 12px; border-radius: 12px;
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .hero-chip .dot { width: 5px; height: 5px; border-radius: 50%; }
+
+    /* ─── RIGHT PANEL: live preview mockup ─── */
+    .predictor-preview {
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 16px; overflow: hidden;
+      box-shadow: 0 0 60px rgba(31,217,164,0.06), 0 0 0 1px rgba(31,217,164,0.05);
+    }
+    .preview-topbar {
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+      background: var(--surface2);
+    }
+    .preview-dots { display: flex; gap: 6px; }
+    .preview-dots span { width: 10px; height: 10px; border-radius: 50%; }
+    .pd1 { background: #FF5F57; } .pd2 { background: #FDBC2C; } .pd3 { background: #28C840; }
+    .preview-title { font-size: 12px; color: var(--text3); margin-left: 4px; }
+    .preview-body { padding: 20px; }
+
+    /* mini score ring in preview */
+    .preview-score-row {
+      display: flex; align-items: center; gap: 16px; margin-bottom: 16px;
+    }
+    .mini-ring { position: relative; width: 72px; height: 72px; flex-shrink: 0; }
+    .mini-ring svg { transform: rotate(-90deg); }
+    .mini-ring-label {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    }
+    .mini-ring-num { font-family: var(--font-head); font-size: 18px; font-weight: 800; color: var(--amber); }
+    .mini-ring-sub { font-size: 8px; color: var(--text3); letter-spacing: 0.5px; }
+    .preview-score-meta {}
+    .preview-risk-badge {
+      display: inline-block; font-size: 10px; font-weight: 700;
+      letter-spacing: 0.6px; text-transform: uppercase;
+      padding: 3px 9px; border-radius: 12px; margin-bottom: 5px;
+      background: rgba(245,166,35,0.15); color: var(--amber); border: 1px solid rgba(245,166,35,0.3);
+    }
+    .preview-score-note { font-size: 12px; color: var(--text2); line-height: 1.5; }
+
+    /* mini bars */
+    .preview-bars { display: flex; flex-direction: column; gap: 7px; margin-bottom: 16px; }
+    .preview-bar-row { display: grid; grid-template-columns: 80px 1fr 28px; gap: 8px; align-items: center; }
+    .preview-bar-label { font-size: 11px; color: var(--text3); }
+    .preview-bar-track { height: 4px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden; }
+    .preview-bar-fill  { height: 100%; border-radius: 2px; }
+    .preview-bar-num   { font-size: 11px; color: var(--text2); text-align: right; font-weight: 500; }
+
+    /* timeline pill */
+    .preview-timeline {
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;
+    }
+    .preview-tl-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; }
+    .preview-tl-row { display: flex; align-items: center; gap: 10px; }
+    .preview-tl-num { font-family: var(--font-head); font-size: 22px; font-weight: 700; color: var(--text); }
+    .preview-tl-detail { font-size: 12px; color: var(--text2); line-height: 1.4; }
+    .preview-tl-var { color: var(--amber); font-weight: 600; }
+
+    .preview-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+    .preview-pill {
+      font-size: 10px; padding: 3px 9px;
+      border-radius: 20px; border: 1px solid;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .pp-amber { background: rgba(245,166,35,0.08); border-color: rgba(245,166,35,0.2); color: var(--amber); }
+    .pp-blue  { background: rgba(59,139,247,0.08);  border-color: rgba(59,139,247,0.2);  color: var(--accent); }
+    .pp-green { background: rgba(31,217,164,0.08);  border-color: rgba(31,217,164,0.2);  color: var(--teal); }
+
+    /* ─── PAGE LAYOUT BELOW HERO ─── */
+    section { padding: 80px 2rem; }
+    .section-inner { max-width: 1160px; margin: auto; }
+
+    .section-eyebrow {
+      font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+      color: var(--teal); font-weight: 600; margin-bottom: 10px;
+    }
+
+    h2 {
+      font-family: var(--font-head);
+      font-size: clamp(24px, 3.5vw, 40px);
+      font-weight: 700; letter-spacing: -0.8px;
+      line-height: 1.15; color: var(--text); margin-bottom: 14px;
+    }
+
+    .section-desc { color: var(--text2); font-size: 15px; max-width: 520px; line-height: 1.75; }
+
+    /* ─── FORM SECTION ─── */
+    .form-section { background: var(--bg); }
+
+    .form-grid {
+      display: grid; grid-template-columns: 1fr 340px;
+      gap: 28px; align-items: start; margin-top: 40px;
+    }
+
+    /* Card */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r2);
+      padding: 28px 32px;
+      transition: border-color 0.25s;
+    }
+    .card:hover { border-color: var(--border2); }
+
+    .card-title {
+      font-family: var(--font-head);
+      font-size: 12px; font-weight: 700;
+      letter-spacing: 1.2px; text-transform: uppercase;
+      color: var(--text3); margin-bottom: 22px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card-title::before {
+      content: ''; display: block; width: 3px; height: 14px;
+      background: var(--teal); border-radius: 2px;
+    }
+
+    /* Demo presets */
+    .demo-label { font-size: 11px; color: var(--text3); margin-bottom: 8px; letter-spacing: 0.3px; }
+    .demo-row { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 22px; }
+    .demo-btn {
+      background: rgba(255,255,255,0.03); border: 1px solid var(--border2);
+      border-radius: 20px; padding: 4px 13px;
+      font-family: var(--font-body); font-size: 12px; font-weight: 500;
+      color: var(--text3); cursor: pointer; transition: all 0.2s;
+    }
+    .demo-btn:hover { border-color: var(--teal); color: var(--teal); background: rgba(31,217,164,0.07); }
+
+    /* Form inputs — match site's dark aesthetic */
+    .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .field-grid .full { grid-column: 1 / -1; }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 12px; color: var(--text2); font-weight: 500; }
+
+    .fi, .fs, .ft {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border2);
+      border-radius: 8px; padding: 10px 14px;
+      font-family: var(--font-body); font-size: 14px;
+      color: var(--text); outline: none; width: 100%;
+      transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+    }
+    .fi:focus, .fs:focus, .ft:focus {
+      border-color: var(--teal);
+      background: rgba(31,217,164,0.04);
+      box-shadow: 0 0 0 3px rgba(31,217,164,0.08);
+    }
+    .fi::placeholder, .ft::placeholder { color: var(--text3); }
+    .fs {
+      appearance: none; cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 4l4 4 4-4' fill='none' stroke='%23505D78' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px;
+    }
+    .fs option { background: #0c1221; color: var(--text); }
+    .ft { resize: vertical; min-height: 90px; line-height: 1.6; }
+
+    /* Slider */
+    .slider-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .slider-val { font-family: var(--font-head); font-size: 14px; font-weight: 700; color: var(--teal); }
+    .slider-limits { display: flex; justify-content: space-between; font-size: 10px; color: var(--text3); margin-top: 3px; }
+
+    input[type=range] {
+      width: 100%; appearance: none; height: 4px;
+      background: rgba(255,255,255,0.08); border-radius: 2px; outline: none; cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      appearance: none; width: 16px; height: 16px;
+      background: var(--teal); border-radius: 50%;
+      box-shadow: 0 0 0 3px rgba(31,217,164,0.2);
+      transition: box-shadow 0.15s;
+    }
+    input[type=range]::-webkit-slider-thumb:hover { box-shadow: 0 0 0 5px rgba(31,217,164,0.25); }
+
+    /* Submit */
+    .btn-submit {
+      width: 100%; margin-top: 22px;
+      background: var(--teal); color: #04070f;
+      border: none; border-radius: 10px;
+      padding: 14px 28px;
+      font-family: var(--font-head); font-size: 15px; font-weight: 700;
+      cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: opacity 0.2s, transform 0.15s;
+      letter-spacing: 0.2px;
+    }
+    .btn-submit:hover:not(:disabled) { opacity: 0.88; transform: translateY(-1px); }
+    .btn-submit:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    /* ─── SIDEBAR INFO CARDS ─── */
+    .sidebar { display: flex; flex-direction: column; gap: 14px; }
+
+    .info-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r2); padding: 22px;
+      position: relative; overflow: hidden;
+    }
+    .info-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, var(--teal), transparent); opacity: 0.6;
+    }
+    .info-card-icon { font-size: 22px; margin-bottom: 10px; }
+    .info-card h3 {
+      font-family: var(--font-head); font-size: 15px; font-weight: 700;
+      color: var(--text); margin-bottom: 6px; letter-spacing: -0.3px;
+    }
+    .info-card p { font-size: 12px; color: var(--text2); line-height: 1.65; }
+
+    .output-list { list-style: none; margin-top: 12px; display: flex; flex-direction: column; gap: 7px; }
+    .output-list li {
+      font-size: 12px; color: var(--text2);
+      display: flex; align-items: center; gap: 8px; padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .output-list li:last-child { border-bottom: none; }
+    .output-list li::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--teal); flex-shrink: 0; }
+
+    /* ─── LOADING ─── */
+    .loading-wrap {
+      display: none; text-align: center; padding: 60px 0;
+    }
+    .loading-wrap.active { display: block; }
+    .spinner {
+      width: 44px; height: 44px;
+      border: 3px solid rgba(31,217,164,0.15);
+      border-top-color: var(--teal); border-radius: 50%;
+      margin: 0 auto 20px;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { font-size: 14px; color: var(--text2); animation: fade-pulse 1.6s ease-in-out infinite; }
+    @keyframes fade-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+    /* ─── ERROR BANNER ─── */
+    .error-bar {
+      display: none; background: rgba(239,68,68,0.08);
+      border: 1px solid rgba(239,68,68,0.2); border-radius: var(--r);
+      padding: 14px 18px; font-size: 14px; color: #FDA4AF; margin-bottom: 20px;
+    }
+    .error-bar.active { display: block; }
+
+    /* ─── RESULTS ─── */
+    #results-section {
+      display: none;
+      animation: reveal 0.45s ease forwards;
+    }
+    #results-section.active { display: block; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* results inner wrap */
+    .results-wrap { max-width: 1160px; margin: 0 auto; padding: 0 2rem; }
+
+    /* Reset btn */
+    .btn-reset {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: none; border: 1px solid var(--border2);
+      border-radius: 8px; padding: 8px 16px;
+      font-family: var(--font-body); font-size: 13px; color: var(--text2);
+      cursor: pointer; transition: all 0.2s; margin-bottom: 28px;
+    }
+    .btn-reset:hover { border-color: var(--teal); color: var(--teal); }
+
+    /* Risk score card — same 2-col layout as homepage metric-row section */
+    .result-score-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r2); padding: 32px;
+      margin-bottom: 16px;
+      display: grid; grid-template-columns: auto 1fr;
+      gap: 40px; align-items: center;
+    }
+
+    /* Ring */
+    .ring-wrap { position: relative; width: 140px; height: 140px; flex-shrink: 0; }
+    .ring-svg  { transform: rotate(-90deg); }
+    .ring-bg   { fill: none; stroke: rgba(255,255,255,0.05); stroke-width: 10; }
+    .ring-prog {
+      fill: none; stroke-width: 10; stroke-linecap: round;
+      stroke-dasharray: 376; stroke-dashoffset: 376;
+      transition: stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.4s;
+    }
+    .ring-label {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    }
+    .ring-num { font-family: var(--font-head); font-size: 36px; font-weight: 800; line-height: 1; }
+    .ring-sub { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.8px; margin-top: 2px; }
+
+    .score-meta {}
+    .risk-badge {
+      display: inline-block; font-size: 11px; font-weight: 700;
+      letter-spacing: 0.8px; text-transform: uppercase;
+      padding: 4px 12px; border-radius: 20px; margin-bottom: 10px;
+    }
+    .score-summary { font-size: 15px; color: var(--text2); line-height: 1.65; margin-bottom: 12px; }
+    .confidence-note { font-size: 12px; color: var(--text3); }
+    .confidence-note span { color: var(--teal); font-weight: 600; }
+
+    /* Breakdown bars — same style as homepage metric rows */
+    .breakdown { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+    .bdown-row {
+      background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px 16px;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .bdown-name { font-size: 12px; color: var(--text2); min-width: 110px; }
+    .bdown-track { flex: 1; height: 4px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden; }
+    .bdown-fill  { height: 100%; border-radius: 2px; width: 0%; transition: width 1s cubic-bezier(0.4,0,0.2,1) 0.3s; }
+    .bdown-val   { font-family: var(--font-head); font-size: 16px; font-weight: 700; min-width: 36px; text-align: right; }
+    .bdown-note  { font-size: 11px; color: var(--text3); font-style: italic; }
+
+    /* Timeline card */
+    .result-tl-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--r2); padding: 32px; margin-bottom: 16px;
+    }
+    .card-eyebrow {
+      font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+      color: var(--teal); font-weight: 600; margin-bottom: 16px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card-eyebrow::before {
+      content: ''; display: block; width: 3px; height: 12px;
+      background: var(--teal); border-radius: 2px;
+    }
+    .tl-verdict-row { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+    .verdict-badge {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+      padding: 5px 14px; border-radius: 20px; white-space: nowrap;
+    }
+    .tl-months {
+      font-family: var(--font-head); font-size: 32px; font-weight: 800;
+      letter-spacing: -1px; color: var(--text);
+    }
+    .tl-months small { font-size: 14px; font-weight: 400; color: var(--text2); margin-left: 5px; }
+    .tl-variance { font-size: 13px; margin-left: auto; }
+    .tl-summary  { font-size: 14px; color: var(--text2); line-height: 1.65; margin-bottom: 8px; }
+    .tl-confidence { font-size: 12px; color: var(--text3); margin-bottom: 22px; }
+    .tl-confidence span { color: var(--accent); font-weight: 600; }
+
+    /* Phase bars */
+    .phases { display: flex; flex-direction: column; gap: 12px; }
+    .phase-row { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; }
+    .phase-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .phase-name { font-size: 13px; color: var(--text2); }
+    .phase-nums { font-size: 11px; color: var(--text3); display: flex; gap: 10px; }
+    .phase-nums .pred { color: var(--teal); font-weight: 600; }
+    .phase-track { position: relative; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; }
+    .phase-planned   { position: absolute; top:0;left:0;height:100%; background: rgba(255,255,255,0.1); border-radius:3px; transition:width 1s ease 0.4s; }
+    .phase-predicted { position: absolute; top:0;left:0;height:100%; background: var(--teal); border-radius:3px; opacity:0.8; transition:width 1.2s ease 0.5s; }
+
+    /* Risks card */
+    .result-risks-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--r2); padding: 32px; margin-bottom: 16px;
+    }
+    .risk-item {
+      display: grid; grid-template-columns: 32px 1fr;
+      gap: 14px; padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .risk-item:last-child { border-bottom: none; padding-bottom: 0; }
+    .risk-num {
+      width: 26px; height: 26px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; flex-shrink: 0; margin-top: 2px;
+    }
+    .risk-body {}
+    .risk-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .risk-name { font-size: 14px; font-weight: 600; color: var(--text); }
+    .impact-badge {
+      font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+      padding: 2px 7px; border-radius: 4px;
+    }
+    .risk-desc { font-size: 13px; color: var(--text2); line-height: 1.55; }
+
+    /* Recommendations card — teal tinted */
+    .result-recs-card {
+      background: rgba(31,217,164,0.04);
+      border: 1px solid rgba(31,217,164,0.18);
+      border-radius: var(--r2); padding: 28px 32px; margin-bottom: 16px;
+    }
+    .rec-item {
+      display: flex; gap: 14px; padding: 10px 0;
+      border-bottom: 1px solid rgba(31,217,164,0.08);
+      font-size: 14px; color: var(--text2); line-height: 1.55;
+    }
+    .rec-item:last-child { border-bottom: none; padding-bottom: 0; }
+    .rec-num {
+      font-family: var(--font-head); font-size: 11px; font-weight: 700;
+      color: var(--teal); min-width: 22px; margin-top: 2px;
+    }
+
+    /* ─── CTA / FOOTER STRIP ─── */
+    .cta-strip {
+      background: var(--bg2); border-top: 1px solid var(--border);
+      padding: 60px 2rem; text-align: center;
+    }
+    .cta-strip h2 { margin: 0 auto 12px; max-width: 500px; }
+    .cta-strip p  { color: var(--text2); max-width: 420px; margin: 0 auto 28px; font-size: 15px; }
+    .cta-actions  { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn-accent {
+      background: var(--accent); color: #fff;
+      padding: 11px 24px; border-radius: 8px;
+      font-family: var(--font-body); font-size: 14px; font-weight: 500;
+      border: none; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px; transition: opacity 0.2s, transform 0.15s;
+    }
+    .btn-accent:hover { opacity: 0.9; transform: translateY(-1px); }
+
+    /* ─── FOOTER ─── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 2rem; text-align: center;
+    }
+    .footer-inner { max-width: 1160px; margin: auto; }
+    .footer-links { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-bottom: 20px; }
+    .footer-links a { font-size: 13px; color: var(--text3); transition: color 0.2s; }
+    .footer-links a:hover { color: var(--text2); }
+    .footer-copy { font-size: 12px; color: var(--text3); }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 960px) {
+      .hero-content { grid-template-columns: 1fr; gap: 40px; }
+      .form-grid    { grid-template-columns: 1fr; }
+      .result-score-card { grid-template-columns: 1fr; text-align: center; }
+      .ring-wrap { margin: 0 auto; }
+    }
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+      .nav-toggle { display: flex; }
+      .nav-links.open {
+        display: flex; flex-direction: column;
+        position: absolute; top: 60px; left: 0; right: 0;
+        background: rgba(4,7,15,0.97); padding: 16px;
+        border-bottom: 1px solid var(--border); gap: 4px;
+      }
+      .field-grid { grid-template-columns: 1fr; }
+      .field-grid .full { grid-column: 1; }
+      .bdown-row { flex-wrap: wrap; }
+      .bdown-name { min-width: 80px; }
+      h1 { letter-spacing: -0.8px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════
+     NAV
+══════════════════════════════════════ -->
+<nav>
+  <div class="nav-inner">
+    <a href="../index.html" class="logo"><span>Musk</span><span>-IT</span></a>
+    <button class="nav-toggle" id="navToggle" aria-label="Toggle menu">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="nav-links" id="navLinks">
+      <a href="../features.html">Modules</a>
+      <a href="../pricing.html">Licensing</a>
+      <a href="../docs/index.html">Docs</a>
+      <a href="../blog/index.html">Blog</a>
+      <a href="../case-studies/index.html">Case Studies</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="index.html" class="nav-ai-active"><span class="nav-dot"></span>AI Predictor</a>
+      <a href="https://enterprise.muskit.in" class="btn-nav">Enterprise Login →</a>
+    </div>
+  </div>
+</nav>
+
+
+<!-- ══════════════════════════════════════
+     HERO
+══════════════════════════════════════ -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-grid-lines"></div>
+  <div class="hero-content">
+
+    <!-- Left: headline + actions -->
+    <div>
+      <div class="hero-badge">
+        <span class="badge-dot"></span>
+        AI-Powered · Instant Analysis · No Signup
+      </div>
+      <h1>Project <span class="highlight">Risk &amp; Timeline</span><br>Predictor</h1>
+      <p class="hero-desc">
+        Enter your project's budget, team, scope and timeline.
+        Our AI analyses every variable and returns a risk score,
+        timeline forecast and mitigation plan in seconds.
+      </p>
+      <div class="hero-actions">
+        <a href="#predictor-form" class="btn-primary">
+          <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Run Free Prediction
+        </a>
+        <a href="https://hvac.muskit.in" class="btn-hvac-engine">
+          <span class="btn-hvac-engine__badge">Live</span>
+          <span>Open HVAC Calculation Engine</span>
+        </a>
+        <a href="../features.html" class="btn-ghost">Explore Platform →</a>
+      </div>
+      <div class="hero-chips">
+        <span class="hero-chip"><span class="dot" style="background:var(--teal)"></span>Risk Score 0–100</span>
+        <span class="hero-chip"><span class="dot" style="background:var(--accent)"></span>Timeline Variance</span>
+        <span class="hero-chip"><span class="dot" style="background:var(--amber)"></span>Phase Breakdown</span>
+        <span class="hero-chip"><span class="dot" style="background:var(--teal)"></span>Mitigation Plan</span>
+      </div>
+    </div>
+
+    <!-- Right: live result preview mockup -->
+    <div>
+      <div class="predictor-preview">
+        <div class="preview-topbar">
+          <div class="preview-dots"><span class="pd1"></span><span class="pd2"></span><span class="pd3"></span></div>
+          <span class="preview-title">AI Prediction Result — EPC Project Sample</span>
+        </div>
+        <div class="preview-body">
+
+          <!-- Score ring + label -->
+          <div class="preview-score-row">
+            <div class="mini-ring">
+              <svg width="72" height="72" viewBox="0 0 72 72">
+                <circle cx="36" cy="36" r="30" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="6"/>
+                <circle cx="36" cy="36" r="30" fill="none" stroke="#F5A623" stroke-width="6"
+                  stroke-linecap="round"
+                  stroke-dasharray="188"
+                  stroke-dashoffset="76"
+                  style="transform:rotate(-90deg);transform-origin:center"/>
+              </svg>
+              <div class="mini-ring-label">
+                <span class="mini-ring-num">59</span>
+                <span class="mini-ring-sub">Risk</span>
+              </div>
+            </div>
+            <div class="preview-score-meta">
+              <div class="preview-risk-badge">Medium Risk</div>
+              <div class="preview-score-note">Budget pressure and tight schedule increase exposure on civil interfaces.</div>
+            </div>
+          </div>
+
+          <!-- Breakdown bars -->
+          <div class="preview-bars">
+            <div class="preview-bar-row">
+              <span class="preview-bar-label">Budget</span>
+              <div class="preview-bar-track"><div class="preview-bar-fill" style="width:68%;background:#F5A623"></div></div>
+              <span class="preview-bar-num">68</span>
+            </div>
+            <div class="preview-bar-row">
+              <span class="preview-bar-label">Schedule</span>
+              <div class="preview-bar-track"><div class="preview-bar-fill" style="width:72%;background:#F97316"></div></div>
+              <span class="preview-bar-num">72</span>
+            </div>
+            <div class="preview-bar-row">
+              <span class="preview-bar-label">Team</span>
+              <div class="preview-bar-track"><div class="preview-bar-fill" style="width:44%;background:#1FD9A4"></div></div>
+              <span class="preview-bar-num">44</span>
+            </div>
+            <div class="preview-bar-row">
+              <span class="preview-bar-label">Scope</span>
+              <div class="preview-bar-track"><div class="preview-bar-fill" style="width:55%;background:#F5A623"></div></div>
+              <span class="preview-bar-num">55</span>
+            </div>
+          </div>
+
+          <!-- Timeline -->
+          <div class="preview-timeline">
+            <div class="preview-tl-label">Timeline Forecast</div>
+            <div class="preview-tl-row">
+              <span class="preview-tl-num">28</span>
+              <div class="preview-tl-detail">
+                months predicted<br>
+                <span class="preview-tl-var">+4 months (17% overrun)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pills -->
+          <div class="preview-pills">
+            <span class="preview-pill pp-amber">⚠ Civil delay risk</span>
+            <span class="preview-pill pp-blue">↗ Procurement gap</span>
+            <span class="preview-pill pp-green">✓ Team size adequate</span>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════
+     PREDICTOR FORM SECTION
+══════════════════════════════════════ -->
+<section class="form-section" id="predictor-form">
+  <div class="section-inner">
+
+    <div class="section-eyebrow">AI Prediction Engine</div>
+    <h2>Enter your project details</h2>
+    <p class="section-desc">The more detail you provide in the scope description, the more accurate your risk and timeline prediction will be.</p>
+
+    <!-- Error bar -->
+    <div class="error-bar" id="ai-error"></div>
+
+    <div class="form-grid">
+
+      <!-- ── Main form card ── -->
+      <div class="card" style="margin-top:40px">
+        <div class="card-title">Project Details</div>
+
+        <!-- Demo presets -->
+        <div class="demo-label">Try a demo project</div>
+        <div class="demo-row">
+          <button class="demo-btn" data-demo="demo-epc-large">Large EPC</button>
+          <button class="demo-btn" data-demo="demo-infra-medium">Urban Infrastructure</button>
+          <button class="demo-btn" data-demo="demo-solar-small">Solar Plant</button>
+          <button class="demo-btn" data-demo="demo-building-small">Commercial Building</button>
+        </div>
+
+        <div class="field-grid">
+
+          <div class="field full">
+            <label for="ai-project-name">Project Name *</label>
+            <input class="fi" id="ai-project-name" type="text" placeholder="e.g. Refinery Expansion Unit 4">
+          </div>
+
+          <div class="field">
+            <label for="ai-project-type">Project Type *</label>
+            <select class="fs" id="ai-project-type">
+              <option value="">Select type...</option>
+              <option>EPC / Turnkey</option>
+              <option>Infrastructure / Civil</option>
+              <option>Industrial / Plant</option>
+              <option>Building &amp; Construction</option>
+              <option>IT / Software</option>
+              <option>Renewable Energy</option>
+              <option>Oil &amp; Gas</option>
+              <option>Other</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="ai-budget">Total Budget *</label>
+            <input class="fi" id="ai-budget" type="text" placeholder="e.g. ₹480 Cr or $12M">
+          </div>
+
+          <div class="field">
+            <label for="ai-location">Location</label>
+            <input class="fi" id="ai-location" type="text" placeholder="e.g. Mumbai, Maharashtra">
+          </div>
+
+          <div class="field">
+            <label for="ai-client-type">Client Type</label>
+            <select class="fs" id="ai-client-type">
+              <option value="">Select...</option>
+              <option>Government PSU</option>
+              <option>NHAI / State PWD</option>
+              <option>Private Developer</option>
+              <option>Multinational</option>
+              <option>PPP</option>
+              <option>Other</option>
+            </select>
+          </div>
+
+          <div class="field full">
+            <div class="slider-head">
+              <label>Project Duration *</label>
+              <span class="slider-val" id="ai-duration-display">12 months</span>
+            </div>
+            <input type="range" id="ai-duration" min="1" max="96" value="12" step="1">
+            <input type="hidden" id="ai-duration-val" value="12">
+            <div class="slider-limits"><span>1 month</span><span>8 years</span></div>
+          </div>
+
+          <div class="field full">
+            <div class="slider-head">
+              <label>Team Size *</label>
+              <span class="slider-val" id="ai-team-display">10 people</span>
+            </div>
+            <input type="range" id="ai-team" min="1" max="500" value="10" step="1">
+            <input type="hidden" id="ai-team-val" value="10">
+            <div class="slider-limits"><span>1 person</span><span>500+ people</span></div>
+          </div>
+
+          <div class="field full">
+            <label for="ai-scope">
+              Project Scope Description *
+              <span style="color:var(--text3);font-size:11px;margin-left:6px">more detail = better prediction</span>
+            </label>
+            <textarea class="ft" id="ai-scope" rows="5"
+              placeholder="Describe key deliverables, systems, interfaces, known challenges, phases, and any special conditions..."></textarea>
+          </div>
+
+        </div>
+
+        <button class="btn-submit" id="ai-submit-btn">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Run AI Prediction
+        </button>
+      </div>
+
+      <!-- ── Sidebar ── -->
+      <div class="sidebar" style="margin-top:40px">
+
+        <div class="info-card">
+          <div class="info-card-icon">🎯</div>
+          <h3>What you'll get</h3>
+          <ul class="output-list">
+            <li>Risk score (0–100) with breakdown by category</li>
+            <li>Timeline forecast with variance %</li>
+            <li>Phase-by-phase schedule prediction</li>
+            <li>Top risk factors with impact ratings</li>
+            <li>Mitigation &amp; scheduling recommendations</li>
+          </ul>
+        </div>
+
+        <div class="info-card">
+          <div class="info-card-icon">⚡</div>
+          <h3>Instant · Free · Confidential</h3>
+          <p>No login required. Results are generated in real time using Claude AI. Your data is never stored or shared.</p>
+        </div>
+
+        <div class="info-card">
+          <div class="info-card-icon">🏗️</div>
+          <h3>Built for EPC & Infrastructure</h3>
+          <p>Trained on EPC, civil, industrial, energy and construction project patterns. Understands Indian project contexts, PSU clients and multi-discipline programs.</p>
+        </div>
+
+      </div>
+
+    </div><!-- /form-grid -->
+
+    <!-- Loading -->
+    <div class="loading-wrap" id="ai-loading">
+      <div class="spinner"></div>
+      <div class="loading-text" id="ai-loading-text">Analysing your project...</div>
+    </div>
+
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════
+     RESULTS SECTION
+══════════════════════════════════════ -->
+<div id="results-section">
+  <section style="padding:40px 0 0">
+    <div class="results-wrap">
+
+      <button class="btn-reset" id="ai-reset-btn">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" stroke-linecap="round"/>
+          <path d="M3 3v5h5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Analyse another project
+      </button>
+
+      <!-- Risk Score Card -->
+      <div class="result-score-card">
+        <div class="ring-wrap">
+          <svg class="ring-svg" width="140" height="140" viewBox="0 0 140 140">
+            <circle class="ring-bg" cx="70" cy="70" r="60"/>
+            <circle class="ring-prog" id="ai-ring-progress" cx="70" cy="70" r="60"/>
+          </svg>
+          <div class="ring-label">
+            <span class="ring-num" id="ai-ring-score">0</span>
+            <span class="ring-sub">Risk Score</span>
+          </div>
+        </div>
+        <div class="score-meta">
+          <div class="risk-badge" id="ai-risk-level-badge">—</div>
+          <p class="score-summary" id="ai-risk-summary"></p>
+          <div class="confidence-note">AI confidence: <span id="ai-risk-confidence">—</span></div>
+          <div class="breakdown" id="ai-breakdown-bars"></div>
+        </div>
+      </div>
+
+      <!-- Timeline Card -->
+      <div class="result-tl-card">
+        <div class="card-eyebrow">Timeline Forecast</div>
+        <div class="tl-verdict-row">
+          <span class="verdict-badge" id="ai-verdict-badge">—</span>
+          <div>
+            <span class="tl-months" id="ai-predicted-months">—</span>
+            <span class="tl-months"><small>months predicted</small></span>
+          </div>
+          <div class="tl-variance" id="ai-variance"></div>
+        </div>
+        <p class="tl-summary" id="ai-timeline-summary"></p>
+        <div class="tl-confidence">Forecast confidence: <span id="ai-timeline-confidence">—</span></div>
+
+        <div style="font-size:11px;color:var(--text3);margin-bottom:12px;display:flex;align-items:center;gap:8px">
+          <span style="display:inline-block;width:12px;height:4px;background:rgba(255,255,255,0.1);border-radius:2px"></span> Planned &nbsp;
+          <span style="display:inline-block;width:12px;height:4px;background:var(--teal);border-radius:2px;opacity:0.8"></span> Forecast
+        </div>
+        <div class="phases" id="ai-phases"></div>
+      </div>
+
+      <!-- Risk Factors -->
+      <div class="result-risks-card">
+        <div class="card-eyebrow">Key Risk Factors</div>
+        <div id="ai-risk-items"></div>
+      </div>
+
+      <!-- Recommendations -->
+      <div class="result-recs-card">
+        <div class="card-eyebrow" style="color:var(--teal)">Mitigation &amp; Scheduling Recommendations</div>
+        <div id="ai-recs-list"></div>
+      </div>
+
+      <p style="font-size:12px;color:var(--text3);text-align:center;padding:16px 0 40px;line-height:1.7">
+        AI predictions are indicative only. Always validate with a qualified project manager before making decisions.
+      </p>
+
+    </div>
+  </section>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     CTA STRIP
+══════════════════════════════════════ -->
+<div class="cta-strip">
+  <div class="section-inner">
+    <div class="section-eyebrow">Full Platform</div>
+    <h2>Need real-time execution intelligence?</h2>
+    <p>Musk-IT ERP gives your team live BOQ tracking, drawing control and AI delay prediction across every work package.</p>
+    <div class="cta-actions">
+      <a href="https://sales.muskit.in" class="btn-accent">Request Enterprise License →</a>
+      <a href="../features.html" class="btn-ghost">Explore Modules</a>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     FOOTER
+══════════════════════════════════════ -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-links">
+      <a href="../docs/index.html">Docs</a>
+      <a href="../blog/index.html">Blog</a>
+      <a href="../case-studies/index.html">Case Studies</a>
+      <a href="../privacy-policy.html">Privacy Policy</a>
+      <a href="../terms.html">Terms &amp; Conditions</a>
+      <a href="../contact.html">Contact</a>
+    </div>
+    <div class="footer-copy">© 2026 Muskan Chhetri · Musk-IT · All Rights Reserved</div>
+  </div>
+</footer>
+
+
+<!-- ─── Scripts ─── -->
+<script src="results.js"></script>
+<script src="predict.js"></script>
+<script>
+  // Mobile nav
+  document.getElementById('navToggle').addEventListener('click', function () {
+    document.getElementById('navLinks').classList.toggle('open');
+  });
+
+  // Smooth scroll for hero CTA
+  document.querySelector('a[href="#predictor-form"]').addEventListener('click', function(e) {
+    e.preventDefault();
+    document.getElementById('predictor-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  // Override results section show (results.js targets #ai-results — map to our #results-section)
+  const _origRender = window.AIResults?.render;
+  document.addEventListener('DOMContentLoaded', () => {
+    if (window.AIResults) {
+      const orig = window.AIResults.render;
+      window.AIResults.render = function(inputs, risk, timeline) {
+        orig(inputs, risk, timeline);
+        // show our results section
+        const rs = document.getElementById('results-section');
+        if (rs) {
+          rs.style.display = 'block';
+          rs.classList.add('active');
+          setTimeout(() => rs.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+        }
+      };
+    }
+  });
+</script>
+
+</body>
+</html>
