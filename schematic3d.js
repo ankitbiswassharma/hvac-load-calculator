@@ -9,7 +9,24 @@
   const MAX_PITCH = 1.56;
   const ROOM_STROKE = "rgba(176, 192, 224, 0.82)";
   const ROOM_FILL = "rgba(91, 181, 255, 0.05)";
-  const FLOOR_FILL = "rgba(44, 56, 82, 0.52)";
+  const FLOOR_FILL = "rgba(44, 56, 82, 0.72)";
+  const CEILING_FILL = "rgba(96, 110, 144, 0.11)";
+  const WALL_TOP = "rgba(218, 223, 229, 0.96)";
+  const WALL_SIDE = "rgba(177, 183, 192, 0.98)";
+  const WALL_SIDE_ALT = "rgba(161, 168, 177, 0.98)";
+  const WALL_FRONT = "rgba(197, 203, 212, 0.98)";
+  const WALL_FRONT_ALT = "rgba(184, 191, 201, 0.98)";
+  const WALL_BOTTOM = "rgba(133, 140, 148, 0.98)";
+  const WALL_REVEAL = "rgba(104, 113, 124, 0.98)";
+  const SKIRTING_TOP = "rgba(139, 145, 154, 0.98)";
+  const SKIRTING_SIDE = "rgba(95, 103, 112, 0.98)";
+  const SLAB_TOP = "rgba(120, 128, 141, 0.98)";
+  const SLAB_SIDE = "rgba(82, 90, 101, 0.98)";
+  const SLAB_FRONT = "rgba(101, 109, 121, 0.98)";
+  const SHADOW_FILL = "rgba(5, 9, 16, 0.48)";
+  const WINDOW_GLASS = "rgba(104, 202, 255, 0.34)";
+  const WINDOW_FRAME = "rgba(201, 225, 248, 0.90)";
+  const WINDOW_FRAME_DARK = "rgba(116, 142, 172, 0.96)";
   const AHU_TOP = "rgba(159, 180, 206, 0.95)";
   const AHU_SIDE = "rgba(93, 111, 133, 0.95)";
   const AHU_FRONT = "rgba(71, 83, 99, 0.95)";
@@ -170,13 +187,56 @@
     };
   }
 
-  function createBoxObject(min, max, style, label) {
+  function createBoxObject(min, max, style, label, layer) {
     return {
       kind: "box",
       min: min,
       max: max,
       style: style,
-      label: label || null
+      label: label || null,
+      layer: layer || null
+    };
+  }
+
+  function axisVector(axis, magnitude) {
+    if (axis === "x") {
+      return point(magnitude, 0, 0);
+    }
+    if (axis === "y") {
+      return point(0, magnitude, 0);
+    }
+    return point(0, 0, magnitude);
+  }
+
+  function shiftPoint(value, axis, magnitude) {
+    return addPoint(value, axisVector(axis, magnitude));
+  }
+
+  function segmentAxis(start, end) {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dz = end.z - start.z;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    const absDz = Math.abs(dz);
+    if (absDx >= absDy && absDx >= absDz) {
+      return { axis: "x", sign: dx >= 0 ? 1 : -1, length: absDx };
+    }
+    if (absDy >= absDx && absDy >= absDz) {
+      return { axis: "y", sign: dy >= 0 ? 1 : -1, length: absDy };
+    }
+    return { axis: "z", sign: dz >= 0 ? 1 : -1, length: absDz };
+  }
+
+  function accessoryStyle(style) {
+    return {
+      topFill: colorWithAlpha(style.topFill, 1),
+      sideFill: colorWithAlpha(style.sideFill, 1),
+      sideFillAlt: colorWithAlpha(style.sideFillAlt || style.sideFill, 1),
+      frontFill: colorWithAlpha(style.frontFill, 1),
+      frontFillAlt: colorWithAlpha(style.frontFillAlt || style.frontFill, 1),
+      bottomFill: colorWithAlpha(style.bottomFill || style.frontFill, 1),
+      stroke: "rgba(242, 247, 255, 0.32)"
     };
   }
 
@@ -218,6 +278,75 @@
     }
   }
 
+  function addSegmentBands(objects, start, end, section, style) {
+    const axisInfo = segmentAxis(start, end);
+    const length = axisInfo.length;
+    if (length < 0.45) {
+      return;
+    }
+    const bandDepth = clamp(Math.min((section && section.width) || 0.16, (section && section.height) || 0.14) * 0.46, 0.035, 0.09);
+    const positions = [0.12, 0.88];
+    const repeatCount = Math.floor(length / 2.6);
+    for (let index = 1; index <= repeatCount; index += 1) {
+      positions.push(clamp(index / (repeatCount + 1), 0.18, 0.82));
+    }
+    positions.forEach(function (progress) {
+      const center = segmentPoint([start, end], progress);
+      const bandStart = shiftPoint(center, axisInfo.axis, -bandDepth / 2);
+      const bandEnd = shiftPoint(center, axisInfo.axis, bandDepth / 2);
+      objects.push(buildSegmentBox(bandStart, bandEnd, {
+        width: Math.max((section && section.width) || 0.16, 0.08) * 1.08,
+        height: Math.max((section && section.height) || 0.14, 0.08) * 1.08
+      }, accessoryStyle(style)));
+    });
+  }
+
+  function addJointFitting(objects, joint, previous, next, section, style) {
+    if (!previous || !next) {
+      return;
+    }
+    const prevAxis = segmentAxis(previous, joint);
+    const nextAxis = segmentAxis(joint, next);
+    const halfWidth = Math.max((section && section.width) || 0.16, 0.08) / 2;
+    const halfHeight = Math.max((section && section.height) || 0.14, 0.08) / 2;
+    const armDepth = clamp(Math.max(halfWidth, halfHeight) * 1.25, 0.1, 0.28);
+    const min = point(joint.x - halfWidth * 1.08, joint.y - halfWidth * 1.08, joint.z - halfHeight * 1.08);
+    const max = point(joint.x + halfWidth * 1.08, joint.y + halfWidth * 1.08, joint.z + halfHeight * 1.08);
+
+    [prevAxis, nextAxis].forEach(function (axisInfo) {
+      if (axisInfo.axis === "x") {
+        if (axisInfo.sign >= 0) {
+          max.x = Math.max(max.x, joint.x + armDepth);
+        } else {
+          min.x = Math.min(min.x, joint.x - armDepth);
+        }
+      } else if (axisInfo.axis === "y") {
+        if (axisInfo.sign >= 0) {
+          max.y = Math.max(max.y, joint.y + armDepth);
+        } else {
+          min.y = Math.min(min.y, joint.y - armDepth);
+        }
+      } else if (axisInfo.sign >= 0) {
+        max.z = Math.max(max.z, joint.z + armDepth);
+      } else {
+        min.z = Math.min(min.z, joint.z - armDepth);
+      }
+    });
+
+    objects.push(createBoxObject(min, max, accessoryStyle(style)));
+  }
+
+  function addJunctionBox(objects, center, section, style, scale) {
+    const width = Math.max((section && section.width) || 0.16, 0.08) * (scale || 1.45);
+    const height = Math.max((section && section.height) || 0.14, 0.08) * (scale || 1.45);
+    const depth = Math.max(width, height) * 0.85;
+    objects.push(createBoxObject(
+      point(center.x - width / 2, center.y - width / 2, center.z - height / 2),
+      point(center.x + width / 2, center.y + width / 2, center.z + depth / 2),
+      accessoryStyle(style)
+    ));
+  }
+
   function addEndCapBox(objects, anchor, reference, section, style) {
     if (!anchor || !reference) {
       return;
@@ -252,6 +381,12 @@
   function addClosedPolylineBoxes(objects, points, section, style, labelPrefix) {
     addPolylineBoxes(objects, points, section, style, labelPrefix);
     if (points && points.length >= 2) {
+      for (let index = 0; index < points.length - 1; index += 1) {
+        addSegmentBands(objects, points[index], points[index + 1], section, style);
+      }
+      for (let jointIndex = 1; jointIndex < points.length - 1; jointIndex += 1) {
+        addJointFitting(objects, points[jointIndex], points[jointIndex - 1], points[jointIndex + 1], section, style);
+      }
       addEndCapBox(objects, points[0], points[1], section, style);
       addEndCapBox(objects, points[points.length - 1], points[points.length - 2], section, style);
     }
@@ -264,10 +399,25 @@
     const plinthHeight = clamp(height * 0.08, 0.08, 0.16);
     const shellMin = point(min.x, min.y, min.z + plinthHeight);
     const shellMax = clonePoint(max);
-    const coilBandX0 = min.x + width * 0.18;
-    const coilBandX1 = min.x + width * 0.31;
-    const fanBandX0 = min.x + width * 0.68;
+    const filterBandX0 = min.x + width * 0.1;
+    const filterBandX1 = min.x + width * 0.18;
+    const coilBandX0 = min.x + width * 0.22;
+    const coilBandX1 = min.x + width * 0.36;
+    const fanBandX0 = min.x + width * 0.67;
     const panelInset = Math.min(width, depth) * 0.05;
+    const doorInset = clamp(depth * 0.08, 0.05, 0.12);
+    const dischargeHeight = clamp(height * 0.12, 0.12, 0.2);
+    const footWidth = clamp(width * 0.16, 0.16, 0.32);
+    const footDepth = clamp(depth * 0.14, 0.12, 0.22);
+    const shellStyle = {
+      topFill: AHU_TOP,
+      sideFill: AHU_SIDE,
+      sideFillAlt: "rgba(78, 92, 110, 0.99)",
+      frontFill: AHU_FRONT,
+      frontFillAlt: "rgba(56, 66, 79, 0.99)",
+      bottomFill: "rgba(35, 41, 49, 0.95)",
+      stroke: "rgba(225, 233, 247, 0.28)"
+    };
 
     objects.push(createBoxObject(
       min,
@@ -282,19 +432,66 @@
         stroke: "rgba(196, 208, 225, 0.22)"
       }
     ));
+    [0.16, 0.5, 0.84].forEach(function (position) {
+      const footCenterX = min.x + width * position;
+      objects.push(createBoxObject(
+        point(footCenterX - footWidth / 2, min.y + depth * 0.12, min.z),
+        point(footCenterX + footWidth / 2, min.y + depth * 0.12 + footDepth, min.z + plinthHeight + 0.01),
+        {
+          topFill: "rgba(95, 103, 116, 0.98)",
+          sideFill: "rgba(58, 64, 74, 0.98)",
+          sideFillAlt: "rgba(46, 52, 61, 0.98)",
+          frontFill: "rgba(75, 81, 92, 0.98)",
+          frontFillAlt: "rgba(63, 70, 80, 0.98)",
+          bottomFill: "rgba(36, 40, 48, 0.98)",
+          stroke: "rgba(208, 216, 230, 0.14)"
+        }
+      ));
+    });
+    objects.push(createBoxObject(shellMin, shellMax, shellStyle));
     objects.push(createBoxObject(
-      shellMin,
-      shellMax,
+      point(min.x - 0.02, min.y - 0.02, shellMax.z),
+      point(max.x + 0.02, max.y + 0.02, shellMax.z + 0.04),
       {
-        topFill: AHU_TOP,
-        sideFill: AHU_SIDE,
-        sideFillAlt: "rgba(78, 92, 110, 0.99)",
-        frontFill: AHU_FRONT,
-        frontFillAlt: "rgba(56, 66, 79, 0.99)",
-        bottomFill: "rgba(35, 41, 49, 0.95)",
-        stroke: "rgba(225, 233, 247, 0.28)"
+        topFill: "rgba(191, 201, 214, 0.92)",
+        sideFill: "rgba(125, 137, 152, 0.96)",
+        sideFillAlt: "rgba(110, 122, 136, 0.96)",
+        frontFill: "rgba(156, 168, 182, 0.96)",
+        frontFillAlt: "rgba(142, 154, 168, 0.96)",
+        bottomFill: "rgba(90, 101, 115, 0.94)",
+        stroke: "rgba(242, 247, 255, 0.16)"
       }
     ));
+
+    objects.push(createBoxObject(
+      point(filterBandX0, min.y + panelInset, shellMin.z + height * 0.16),
+      point(filterBandX1, max.y - panelInset, shellMax.z - height * 0.18),
+      {
+        topFill: "rgba(214, 189, 108, 0.92)",
+        sideFill: "rgba(141, 117, 56, 0.96)",
+        sideFillAlt: "rgba(123, 101, 49, 0.96)",
+        frontFill: "rgba(181, 152, 77, 0.96)",
+        frontFillAlt: "rgba(161, 135, 69, 0.96)",
+        bottomFill: "rgba(106, 86, 41, 0.92)",
+        stroke: "rgba(255, 242, 196, 0.18)"
+      }
+    ));
+    for (let filterIndex = 0; filterIndex < 4; filterIndex += 1) {
+      const filterX = lerp(filterBandX0 + 0.02, filterBandX1 - 0.02, safeDiv(filterIndex + 0.5, 4, 0.5));
+      objects.push(createBoxObject(
+        point(filterX - 0.012, min.y + panelInset * 1.1, shellMin.z + height * 0.2),
+        point(filterX + 0.012, max.y - panelInset * 1.1, shellMax.z - height * 0.22),
+        {
+          topFill: "rgba(242, 230, 179, 0.96)",
+          sideFill: "rgba(174, 151, 85, 0.96)",
+          sideFillAlt: "rgba(160, 136, 75, 0.96)",
+          frontFill: "rgba(215, 189, 118, 0.96)",
+          frontFillAlt: "rgba(196, 173, 102, 0.96)",
+          bottomFill: "rgba(128, 108, 58, 0.94)",
+          stroke: "rgba(255,255,255,0.08)"
+        }
+      ));
+    }
 
     objects.push(createBoxObject(
       point(coilBandX0, min.y + panelInset, shellMin.z + height * 0.12),
@@ -309,6 +506,36 @@
         stroke: "rgba(213, 244, 255, 0.24)"
       }
     ));
+    for (let coilIndex = 0; coilIndex < 6; coilIndex += 1) {
+      const coilX = lerp(coilBandX0 + 0.018, coilBandX1 - 0.018, safeDiv(coilIndex + 0.5, 6, 0.5));
+      objects.push(createBoxObject(
+        point(coilX - 0.009, min.y + panelInset * 1.1, shellMin.z + height * 0.14),
+        point(coilX + 0.009, max.y - panelInset * 1.1, shellMax.z - height * 0.14),
+        {
+          topFill: "rgba(197, 239, 255, 0.95)",
+          sideFill: "rgba(106, 184, 228, 0.96)",
+          sideFillAlt: "rgba(79, 153, 194, 0.96)",
+          frontFill: "rgba(148, 215, 247, 0.96)",
+          frontFillAlt: "rgba(123, 197, 234, 0.96)",
+          bottomFill: "rgba(58, 128, 166, 0.94)",
+          stroke: "rgba(255,255,255,0.08)"
+        }
+      ));
+    }
+    objects.push(createBoxObject(
+      point(coilBandX0 - 0.01, min.y + panelInset, shellMin.z + height * 0.06),
+      point(coilBandX1 + 0.01, max.y - panelInset, shellMin.z + height * 0.11),
+      {
+        topFill: "rgba(153, 166, 183, 0.94)",
+        sideFill: "rgba(83, 95, 110, 0.96)",
+        sideFillAlt: "rgba(72, 84, 97, 0.96)",
+        frontFill: "rgba(119, 133, 150, 0.96)",
+        frontFillAlt: "rgba(104, 118, 134, 0.96)",
+        bottomFill: "rgba(61, 70, 82, 0.94)",
+        stroke: "rgba(235, 244, 255, 0.12)"
+      }
+    ));
+
     objects.push(createBoxObject(
       point(fanBandX0, min.y + panelInset, shellMin.z + height * 0.16),
       point(max.x - width * 0.08, max.y - panelInset, shellMax.z - height * 0.18),
@@ -322,12 +549,65 @@
         stroke: "rgba(226, 236, 249, 0.20)"
       }
     ));
+    objects.push(createBoxObject(
+      point(fanBandX0 + width * 0.03, min.y + depth * 0.18, shellMin.z + height * 0.28),
+      point(max.x - width * 0.13, max.y - depth * 0.18, shellMax.z - height * 0.3),
+      {
+        topFill: "rgba(110, 122, 140, 0.94)",
+        sideFill: "rgba(63, 74, 89, 0.96)",
+        sideFillAlt: "rgba(53, 64, 77, 0.96)",
+        frontFill: "rgba(88, 101, 117, 0.96)",
+        frontFillAlt: "rgba(74, 87, 101, 0.96)",
+        bottomFill: "rgba(44, 51, 62, 0.94)",
+        stroke: "rgba(228, 236, 248, 0.14)"
+      }
+    ));
+    objects.push(createBoxObject(
+      point(fanBandX0 + width * 0.06, max.y - depth * 0.24, shellMax.z - height * 0.38),
+      point(max.x - width * 0.18, max.y + 0.11, shellMax.z - height * 0.18),
+      {
+        topFill: "rgba(151, 165, 182, 0.94)",
+        sideFill: "rgba(88, 100, 117, 0.96)",
+        sideFillAlt: "rgba(74, 85, 100, 0.96)",
+        frontFill: "rgba(118, 132, 150, 0.96)",
+        frontFillAlt: "rgba(104, 118, 134, 0.96)",
+        bottomFill: "rgba(62, 71, 83, 0.94)",
+        stroke: "rgba(235, 242, 251, 0.14)"
+      }
+    ));
+    objects.push(createBoxObject(
+      point(fanBandX0 + width * 0.12, max.y + 0.03, shellMin.z + height * 0.4),
+      point(fanBandX0 + width * 0.24, max.y + 0.22, shellMin.z + height * 0.56),
+      {
+        topFill: "rgba(184, 138, 92, 0.95)",
+        sideFill: "rgba(116, 82, 48, 0.96)",
+        sideFillAlt: "rgba(104, 72, 42, 0.96)",
+        frontFill: "rgba(150, 108, 63, 0.96)",
+        frontFillAlt: "rgba(134, 94, 55, 0.96)",
+        bottomFill: "rgba(84, 58, 34, 0.94)",
+        stroke: "rgba(251, 227, 198, 0.14)"
+      }
+    ));
 
-    for (let panelIndex = 1; panelIndex <= 2; panelIndex += 1) {
-      const x = min.x + width * (0.18 + panelIndex * 0.22);
+    for (let panelIndex = 0; panelIndex < 3; panelIndex += 1) {
+      const doorX0 = min.x + width * (0.09 + panelIndex * 0.28);
+      const doorX1 = Math.min(doorX0 + width * 0.23, max.x - width * 0.06);
       objects.push(createBoxObject(
-        point(x, max.y - panelInset * 0.8, shellMin.z + 0.12),
-        point(x + 0.025, max.y - panelInset * 0.2, shellMax.z - 0.12),
+        point(doorX0, max.y - doorInset, shellMin.z + 0.12),
+        point(doorX1, max.y - 0.01, shellMax.z - 0.12),
+        {
+          topFill: "rgba(171, 186, 205, 0.32)",
+          sideFill: "rgba(78, 90, 106, 0.2)",
+          sideFillAlt: "rgba(66, 77, 92, 0.2)",
+          frontFill: "rgba(232, 239, 249, 0.08)",
+          frontFillAlt: "rgba(208, 220, 235, 0.08)",
+          bottomFill: "rgba(60, 68, 79, 0.18)",
+          stroke: "rgba(244, 248, 255, 0.26)"
+        }
+      ));
+      objects.push(createBoxObject(
+        point(doorX1 - 0.05, max.y - 0.024, shellMin.z + height * 0.46),
+        point(doorX1 - 0.02, max.y + 0.024, shellMin.z + height * 0.54),
         {
           topFill: "rgba(202, 214, 230, 0.95)",
           sideFill: "rgba(118, 133, 151, 0.96)",
@@ -341,8 +621,8 @@
     }
 
     objects.push(createBoxObject(
-      point(min.x + width * 0.08, max.y - 0.03, shellMin.z + height * 0.24),
-      point(min.x + width * 0.16, max.y + 0.12, shellMax.z - height * 0.18),
+      point(min.x + width * 0.02, max.y - 0.03, shellMin.z + height * 0.24),
+      point(min.x + width * 0.12, max.y + 0.14, shellMax.z - height * 0.18),
       {
         topFill: "rgba(168, 183, 201, 0.92)",
         sideFill: "rgba(95, 109, 126, 0.95)",
@@ -353,6 +633,48 @@
         stroke: "rgba(220, 231, 244, 0.18)"
       }
     ));
+    objects.push(createBoxObject(
+      point(max.x - width * 0.18, min.y + depth * 0.22, shellMax.z),
+      point(max.x - width * 0.08, max.y - depth * 0.22, shellMax.z + dischargeHeight),
+      {
+        topFill: "rgba(180, 192, 207, 0.94)",
+        sideFill: "rgba(100, 113, 130, 0.96)",
+        sideFillAlt: "rgba(89, 102, 118, 0.96)",
+        frontFill: "rgba(134, 149, 167, 0.96)",
+        frontFillAlt: "rgba(118, 133, 152, 0.96)",
+        bottomFill: "rgba(73, 82, 95, 0.94)",
+        stroke: "rgba(235, 244, 255, 0.18)"
+      }
+    ));
+    objects.push(createBoxObject(
+      point(min.x - width * 0.06, min.y + depth * 0.24, shellMin.z + height * 0.26),
+      point(min.x + width * 0.04, max.y - depth * 0.24, shellMin.z + height * 0.66),
+      {
+        topFill: "rgba(176, 190, 209, 0.92)",
+        sideFill: "rgba(102, 114, 131, 0.96)",
+        sideFillAlt: "rgba(88, 100, 116, 0.96)",
+        frontFill: "rgba(133, 148, 167, 0.96)",
+        frontFillAlt: "rgba(118, 132, 149, 0.96)",
+        bottomFill: "rgba(70, 79, 91, 0.94)",
+        stroke: "rgba(230, 240, 251, 0.16)"
+      }
+    ));
+    for (let louverIndex = 0; louverIndex < 5; louverIndex += 1) {
+      const z0 = lerp(shellMin.z + height * 0.3, shellMin.z + height * 0.62, safeDiv(louverIndex, 4, 0));
+      objects.push(createBoxObject(
+        point(min.x - width * 0.058, min.y + depth * 0.26, z0),
+        point(min.x - width * 0.01, max.y - depth * 0.26, z0 + 0.022),
+        {
+          topFill: "rgba(232, 239, 250, 0.94)",
+          sideFill: "rgba(166, 178, 194, 0.96)",
+          sideFillAlt: "rgba(148, 160, 178, 0.96)",
+          frontFill: "rgba(202, 214, 231, 0.96)",
+          frontFillAlt: "rgba(186, 200, 218, 0.96)",
+          bottomFill: "rgba(138, 150, 166, 0.94)",
+          stroke: "rgba(255,255,255,0.08)"
+        }
+      ));
+    }
   }
 
   function addDiffuserAssembly(objects, supplyPoint, ceilingZ) {
@@ -542,6 +864,292 @@
         ));
       }
     }
+  }
+
+  function windowWallFromOrientation(orientation) {
+    const key = String(orientation || "S").toUpperCase();
+    if (key === "E") {
+      return "east";
+    }
+    if (key === "W") {
+      return "west";
+    }
+    if (key === "N" || key === "NE" || key === "NW") {
+      return "north";
+    }
+    return "south";
+  }
+
+  function addWindowAssembly(objects, min, max, orientation) {
+    const outerStyle = {
+      topFill: WINDOW_FRAME,
+      sideFill: WINDOW_FRAME_DARK,
+      sideFillAlt: "rgba(99, 124, 154, 0.96)",
+      frontFill: "rgba(171, 198, 226, 0.96)",
+      frontFillAlt: "rgba(150, 178, 208, 0.96)",
+      bottomFill: "rgba(90, 112, 142, 0.94)",
+      stroke: "rgba(234, 246, 255, 0.18)"
+    };
+    const wall = windowWallFromOrientation(orientation);
+    const wallThickness = Math.max(Math.abs(max.x - min.x), Math.abs(max.y - min.y), 0.08);
+    const frameInset = 0.03;
+    const glassInset = 0.015;
+    const revealStyle = {
+      topFill: "rgba(180, 188, 198, 0.94)",
+      sideFill: WALL_REVEAL,
+      sideFillAlt: "rgba(92, 100, 111, 0.98)",
+      frontFill: "rgba(142, 151, 163, 0.96)",
+      frontFillAlt: "rgba(129, 139, 151, 0.96)",
+      bottomFill: "rgba(77, 84, 94, 0.96)",
+      stroke: "rgba(232, 240, 252, 0.14)"
+    };
+
+    objects.push(createBoxObject(min, max, outerStyle));
+
+    let glassMin = point(min.x + frameInset, min.y + frameInset, min.z + frameInset);
+    let glassMax = point(max.x - frameInset, max.y - frameInset, max.z - frameInset);
+    if (wall === "east" || wall === "west") {
+      glassMin = point(min.x + glassInset, min.y + frameInset, min.z + frameInset);
+      glassMax = point(max.x - glassInset, max.y - frameInset, max.z - frameInset);
+    } else {
+      glassMin = point(min.x + frameInset, min.y + glassInset, min.z + frameInset);
+      glassMax = point(max.x - frameInset, max.y - glassInset, max.z - frameInset);
+    }
+    objects.push(createBoxObject(glassMin, glassMax, {
+      topFill: WINDOW_GLASS,
+      sideFill: "rgba(48, 121, 170, 0.30)",
+      sideFillAlt: "rgba(43, 105, 148, 0.30)",
+      frontFill: "rgba(125, 219, 255, 0.24)",
+      frontFillAlt: "rgba(98, 191, 241, 0.24)",
+      bottomFill: "rgba(35, 82, 115, 0.22)",
+      stroke: "rgba(223, 248, 255, 0.14)"
+    }));
+    objects.push(createBoxObject(
+      point(
+        glassMin.x + (wall === "east" || wall === "west" ? wallThickness * 0.18 : 0),
+        glassMin.y + (wall === "north" || wall === "south" ? wallThickness * 0.18 : 0),
+        glassMin.z + 0.01
+      ),
+      point(
+        glassMax.x - (wall === "east" || wall === "west" ? wallThickness * 0.18 : 0),
+        glassMax.y - (wall === "north" || wall === "south" ? wallThickness * 0.18 : 0),
+        glassMax.z - 0.01
+      ),
+      {
+        topFill: "rgba(208, 244, 255, 0.18)",
+        sideFill: "rgba(96, 176, 216, 0.18)",
+        sideFillAlt: "rgba(85, 160, 203, 0.18)",
+        frontFill: "rgba(180, 234, 255, 0.16)",
+        frontFillAlt: "rgba(144, 214, 246, 0.16)",
+        bottomFill: "rgba(49, 94, 126, 0.14)",
+        stroke: "rgba(241, 252, 255, 0.10)"
+      }
+    ));
+
+    const revealInset = 0.06;
+    if (wall === "east" || wall === "west") {
+      objects.push(createBoxObject(
+        point(min.x, min.y + revealInset, min.z + revealInset),
+        point(max.x, max.y - revealInset, max.z - revealInset),
+        revealStyle
+      ));
+    } else {
+      objects.push(createBoxObject(
+        point(min.x + revealInset, min.y, min.z + revealInset),
+        point(max.x - revealInset, max.y, max.z - revealInset),
+        revealStyle
+      ));
+    }
+
+    const centerX = (min.x + max.x) / 2;
+    const centerY = (min.y + max.y) / 2;
+    const centerZ = (min.z + max.z) / 2;
+    const mullionWidth = 0.025;
+    const transomHeight = 0.025;
+    if (wall === "east" || wall === "west") {
+      objects.push(createBoxObject(
+        point(min.x, centerY - mullionWidth / 2, min.z + 0.05),
+        point(max.x, centerY + mullionWidth / 2, max.z - 0.05),
+        outerStyle
+      ));
+      objects.push(createBoxObject(
+        point(min.x, min.y + 0.05, centerZ - transomHeight / 2),
+        point(max.x, max.y - 0.05, centerZ + transomHeight / 2),
+        outerStyle
+      ));
+    } else {
+      objects.push(createBoxObject(
+        point(centerX - mullionWidth / 2, min.y, min.z + 0.05),
+        point(centerX + mullionWidth / 2, max.y, max.z - 0.05),
+        outerStyle
+      ));
+      objects.push(createBoxObject(
+        point(min.x + 0.05, min.y, centerZ - transomHeight / 2),
+        point(max.x - 0.05, max.y, centerZ + transomHeight / 2),
+        outerStyle
+      ));
+    }
+
+    if (wall === "north") {
+      objects.push(createBoxObject(
+        point(min.x - 0.08, max.y - 0.03, min.z - 0.04),
+        point(max.x + 0.08, max.y + 0.12, min.z + 0.03),
+        revealStyle
+      ));
+    } else if (wall === "south") {
+      objects.push(createBoxObject(
+        point(min.x - 0.08, min.y - 0.12, min.z - 0.04),
+        point(max.x + 0.08, min.y + 0.03, min.z + 0.03),
+        revealStyle
+      ));
+    } else if (wall === "east") {
+      objects.push(createBoxObject(
+        point(max.x - 0.03, min.y - 0.08, min.z - 0.04),
+        point(max.x + 0.12, max.y + 0.08, min.z + 0.03),
+        revealStyle
+      ));
+    } else {
+      objects.push(createBoxObject(
+        point(min.x - 0.12, min.y - 0.08, min.z - 0.04),
+        point(min.x + 0.03, max.y + 0.08, min.z + 0.03),
+        revealStyle
+      ));
+    }
+  }
+
+  function addRoomShell(objects, room) {
+    const wallThickness = room.wallThickness;
+    const slabThickness = room.slabThickness;
+    const trimHeight = clamp(room.height * 0.06, 0.08, 0.16);
+    const crownDepth = clamp(wallThickness * 0.4, 0.04, 0.09);
+    const shellStyle = {
+      topFill: WALL_TOP,
+      sideFill: WALL_SIDE,
+      sideFillAlt: WALL_SIDE_ALT,
+      frontFill: WALL_FRONT,
+      frontFillAlt: WALL_FRONT_ALT,
+      bottomFill: WALL_BOTTOM,
+      stroke: "rgba(241, 246, 252, 0.18)"
+    };
+    const slabStyle = {
+      topFill: SLAB_TOP,
+      sideFill: SLAB_SIDE,
+      sideFillAlt: "rgba(72, 80, 90, 0.98)",
+      frontFill: SLAB_FRONT,
+      frontFillAlt: "rgba(90, 98, 109, 0.98)",
+      bottomFill: "rgba(52, 58, 66, 0.98)",
+      stroke: "rgba(214, 224, 238, 0.12)"
+    };
+    const skirtingStyle = {
+      topFill: SKIRTING_TOP,
+      sideFill: SKIRTING_SIDE,
+      sideFillAlt: "rgba(83, 91, 100, 0.98)",
+      frontFill: "rgba(117, 124, 134, 0.98)",
+      frontFillAlt: "rgba(106, 114, 124, 0.98)",
+      bottomFill: "rgba(64, 72, 80, 0.98)",
+      stroke: "rgba(229, 235, 244, 0.12)"
+    };
+
+    objects.push(createBoxObject(
+      point(-wallThickness, -wallThickness, -slabThickness),
+      point(room.length + wallThickness, room.width + wallThickness, 0),
+      slabStyle,
+      null,
+      "room-floor-shell"
+    ));
+    objects.push(createBoxObject(
+      point(-wallThickness, -wallThickness, room.height),
+      point(room.length + wallThickness, room.width + wallThickness, room.height + slabThickness),
+      slabStyle,
+      null,
+      "room-ceiling-shell"
+    ));
+    objects.push(createBoxObject(
+      point(0, -wallThickness, 0),
+      point(room.length, 0, room.height),
+      shellStyle,
+      null,
+      "room-wall"
+    ));
+    objects.push(createBoxObject(
+      point(0, room.width, 0),
+      point(room.length, room.width + wallThickness, room.height),
+      shellStyle,
+      null,
+      "room-wall"
+    ));
+    objects.push(createBoxObject(
+      point(-wallThickness, 0, 0),
+      point(0, room.width, room.height),
+      shellStyle,
+      null,
+      "room-wall"
+    ));
+    objects.push(createBoxObject(
+      point(room.length, 0, 0),
+      point(room.length + wallThickness, room.width, room.height),
+      shellStyle,
+      null,
+      "room-wall"
+    ));
+
+    objects.push(createBoxObject(
+      point(0.04, 0.02, 0),
+      point(room.length - 0.04, 0.02 + crownDepth, trimHeight),
+      skirtingStyle,
+      null,
+      "room-trim-low"
+    ));
+    objects.push(createBoxObject(
+      point(0.04, room.width - crownDepth - 0.02, 0),
+      point(room.length - 0.04, room.width - 0.02, trimHeight),
+      skirtingStyle,
+      null,
+      "room-trim-low"
+    ));
+    objects.push(createBoxObject(
+      point(0.02, 0.04, 0),
+      point(0.02 + crownDepth, room.width - 0.04, trimHeight),
+      skirtingStyle,
+      null,
+      "room-trim-low"
+    ));
+    objects.push(createBoxObject(
+      point(room.length - crownDepth - 0.02, 0.04, 0),
+      point(room.length - 0.02, room.width - 0.04, trimHeight),
+      skirtingStyle,
+      null,
+      "room-trim-low"
+    ));
+
+    objects.push(createBoxObject(
+      point(0.04, 0.02, room.height - trimHeight),
+      point(room.length - 0.04, 0.02 + crownDepth, room.height),
+      skirtingStyle,
+      null,
+      "room-trim-high"
+    ));
+    objects.push(createBoxObject(
+      point(0.04, room.width - crownDepth - 0.02, room.height - trimHeight),
+      point(room.length - 0.04, room.width - 0.02, room.height),
+      skirtingStyle,
+      null,
+      "room-trim-high"
+    ));
+    objects.push(createBoxObject(
+      point(0.02, 0.04, room.height - trimHeight),
+      point(0.02 + crownDepth, room.width - 0.04, room.height),
+      skirtingStyle,
+      null,
+      "room-trim-high"
+    ));
+    objects.push(createBoxObject(
+      point(room.length - crownDepth - 0.02, 0.04, room.height - trimHeight),
+      point(room.length - 0.02, room.width - 0.04, room.height),
+      skirtingStyle,
+      null,
+      "room-trim-high"
+    ));
   }
 
   function faceListForBox(min, max, style) {
@@ -775,6 +1383,8 @@
       });
     });
     const serviceGap = Math.max(baseServiceGap, serviceDepthCursor + 0.8);
+    const wallThickness = clamp(Math.min(length, width) * 0.022, 0.16, 0.28);
+    const slabThickness = clamp(height * 0.055, 0.12, 0.24);
     const scene = {
       room: {
         length: length,
@@ -782,7 +1392,9 @@
         height: height,
         occupiedZ: occupiedZ,
         ceilingZ: ceilingZ,
-        serviceGap: serviceGap
+        serviceGap: serviceGap,
+        wallThickness: wallThickness,
+        slabThickness: slabThickness
       },
       center: point(length / 2, width / 2, height / 2),
       objects: [],
@@ -792,6 +1404,75 @@
       supplyColor: "#63b8ff",
       returnColor: "#ff8d7b"
     };
+    addRoomShell(scene.objects, scene.room);
+
+    const envelope = (result && result.envelope) || {};
+    const windows = Array.isArray(envelope.windows) ? envelope.windows : [];
+    const windowsByWall = windows.reduce(function (accumulator, windowEntry) {
+      const wall = windowWallFromOrientation(windowEntry.orientation);
+      if (!accumulator[wall]) {
+        accumulator[wall] = [];
+      }
+      accumulator[wall].push(windowEntry);
+      return accumulator;
+    }, {});
+
+    ["north", "south", "east", "west"].forEach(function (wall) {
+      const wallWindows = windowsByWall[wall] || [];
+      if (!wallWindows.length) {
+        return;
+      }
+      const runLength = wall === "north" || wall === "south" ? length : width;
+      const edgePadding = clamp(runLength * 0.08, 0.6, 1.4);
+      const usableRun = Math.max(runLength - edgePadding * 2, 0.8);
+      const provisionalLayouts = wallWindows.map(function (windowEntry) {
+        const panelHeight = clamp(Math.sqrt(Math.max(windowEntry.area || 0, 0) / 1.45), 0.85, Math.max(height * 0.52, 0.9));
+        const panelWidth = clamp(Math.max(windowEntry.area || 0, 0) / Math.max(panelHeight, 0.1), 0.7, Math.max(usableRun * 0.32, 0.9));
+        return {
+          entry: windowEntry,
+          panelHeight: panelHeight,
+          panelWidth: panelWidth
+        };
+      });
+      const targetRun = usableRun * 0.9;
+      const totalWidth = provisionalLayouts.reduce(function (sum, layoutEntry) {
+        return sum + layoutEntry.panelWidth;
+      }, 0);
+      const widthScale = totalWidth > targetRun ? targetRun / totalWidth : 1;
+      provisionalLayouts.forEach(function (layoutEntry) {
+        layoutEntry.panelWidth = clamp(layoutEntry.panelWidth * widthScale, 0.58, Math.max(usableRun * 0.28, 0.74));
+      });
+      const adjustedTotalWidth = provisionalLayouts.reduce(function (sum, layoutEntry) {
+        return sum + layoutEntry.panelWidth;
+      }, 0);
+      const gap = Math.max((usableRun - adjustedTotalWidth) / Math.max(provisionalLayouts.length + 1, 2), 0.12);
+      let cursor = edgePadding + gap;
+      provisionalLayouts.forEach(function (layoutEntry) {
+        const panelWidth = layoutEntry.panelWidth;
+        const panelHeight = layoutEntry.panelHeight;
+        const centerAlong = cursor + panelWidth / 2;
+        const sillZ = clamp(height * 0.26, 0.9, Math.max(height - panelHeight - 0.45, 0.95));
+        const headZ = Math.min(sillZ + panelHeight, height - 0.18);
+        const thickness = wallThickness + 0.02;
+        let min;
+        let max;
+        if (wall === "north") {
+          min = point(clamp(centerAlong - panelWidth / 2, 0.15, length - panelWidth - 0.15), width - 0.01, sillZ);
+          max = point(clamp(centerAlong + panelWidth / 2, panelWidth + 0.15, length - 0.15), width + thickness, headZ);
+        } else if (wall === "south") {
+          min = point(clamp(centerAlong - panelWidth / 2, 0.15, length - panelWidth - 0.15), -thickness, sillZ);
+          max = point(clamp(centerAlong + panelWidth / 2, panelWidth + 0.15, length - 0.15), 0.01, headZ);
+        } else if (wall === "east") {
+          min = point(length - 0.01, clamp(centerAlong - panelWidth / 2, 0.15, width - panelWidth - 0.15), sillZ);
+          max = point(length + thickness, clamp(centerAlong + panelWidth / 2, panelWidth + 0.15, width - 0.15), headZ);
+        } else {
+          min = point(-thickness, clamp(centerAlong - panelWidth / 2, 0.15, width - panelWidth - 0.15), sillZ);
+          max = point(0.01, clamp(centerAlong + panelWidth / 2, panelWidth + 0.15, width - 0.15), headZ);
+        }
+        addWindowAssembly(scene.objects, min, max, wall);
+        cursor += panelWidth + gap;
+      });
+    });
 
     zones.forEach(function (zone) {
       const center = zoneCenter(zone);
@@ -905,6 +1586,15 @@
           bottomFill: "rgba(16, 49, 92, 0.98)",
           stroke: "rgba(180, 226, 255, 0.28)"
         });
+        addJunctionBox(scene.objects, point(zoneCenterPoint.x, zoneCenterPoint.y, supplySpineZ), zoneSupplySection, {
+          topFill: SUPPLY_TOP,
+          sideFill: SUPPLY_SIDE,
+          sideFillAlt: "rgba(18, 66, 116, 0.99)",
+          frontFill: SUPPLY_FRONT,
+          frontFillAlt: "rgba(30, 94, 159, 0.99)",
+          bottomFill: "rgba(16, 49, 92, 0.98)",
+          stroke: "rgba(180, 226, 255, 0.28)"
+        }, 1.34);
         scene.particles.push({
           points: supplyPath.concat([point(zoneCenterPoint.x, zoneCenterPoint.y, occupiedZ + 0.18)]),
           color: "#63b8ff",
@@ -943,6 +1633,15 @@
                 bottomFill: "rgba(14, 44, 84, 0.96)",
                 stroke: "rgba(180, 226, 255, 0.24)"
               });
+              addJunctionBox(scene.objects, branchPoints[0], branchSection, {
+                topFill: "rgba(78, 188, 255, 0.95)",
+                sideFill: "rgba(23, 75, 129, 0.98)",
+                sideFillAlt: "rgba(18, 61, 104, 0.98)",
+                frontFill: "rgba(52, 128, 200, 0.98)",
+                frontFillAlt: "rgba(42, 108, 176, 0.98)",
+                bottomFill: "rgba(14, 44, 84, 0.96)",
+                stroke: "rgba(180, 226, 255, 0.24)"
+              }, 1.18);
             }
           });
         } else {
@@ -973,6 +1672,15 @@
           bottomFill: "rgba(120, 64, 70, 0.98)",
           stroke: "rgba(255, 225, 219, 0.28)"
         });
+        addJunctionBox(scene.objects, collectorPoint, zoneReturnSection, {
+          topFill: RETURN_TOP,
+          sideFill: RETURN_SIDE,
+          sideFillAlt: "rgba(130, 71, 76, 0.99)",
+          frontFill: RETURN_FRONT,
+          frontFillAlt: "rgba(160, 90, 84, 0.99)",
+          bottomFill: "rgba(120, 64, 70, 0.98)",
+          stroke: "rgba(255, 225, 219, 0.28)"
+        }, 1.32);
         scene.particles.push({
           points: [
             point(zoneCenterPoint.x, zoneCenterPoint.y, Math.max(occupiedZ, 0.9)),
@@ -1028,6 +1736,15 @@
               bottomFill: "rgba(99, 55, 61, 0.96)",
               stroke: "rgba(255, 225, 219, 0.24)"
             });
+            addJunctionBox(scene.objects, returnBranchPoints[0], branchSection, {
+              topFill: "rgba(255, 174, 121, 0.95)",
+              sideFill: "rgba(128, 72, 78, 0.98)",
+              sideFillAlt: "rgba(112, 63, 69, 0.98)",
+              frontFill: "rgba(190, 108, 95, 0.98)",
+              frontFillAlt: "rgba(166, 95, 84, 0.98)",
+              bottomFill: "rgba(99, 55, 61, 0.96)",
+              stroke: "rgba(255, 225, 219, 0.24)"
+            }, 1.16);
           }
           if (returnIndex < 4) {
             scene.particles.push({
@@ -1106,6 +1823,7 @@
         pitch: DEFAULT_PITCH,
         zoom: DEFAULT_ZOOM,
         projection: "perspective",
+        cameraMode: "outside",
         panX: 0,
         panY: 0,
         time: 0,
@@ -1120,6 +1838,7 @@
       lastFrame: 0,
       resizeObserver: null,
       viewButtons: [],
+      viewModeButtons: [],
       viewCube: null,
       viewCubeScene: null,
       suppressCubeClick: false
@@ -1140,6 +1859,12 @@
       instance.viewCube.style.transform = "rotateX(" + rotationX + "deg) rotateZ(" + rotationZ + "deg)";
     }
 
+    function syncViewModeButtons() {
+      instance.viewModeButtons.forEach(function (button) {
+        button.classList.toggle("is-active", button.getAttribute("data-schematic-mode") === instance.state.cameraMode);
+      });
+    }
+
     function setView(viewName) {
       const preset = VIEW_PRESETS[viewName] || VIEW_PRESETS.iso;
       instance.state.targetYaw = preset.yaw;
@@ -1151,6 +1876,30 @@
       instance.state.activeView = VIEW_PRESETS[viewName] ? viewName : "iso";
       syncViewButtons();
       syncViewCube();
+    }
+
+    function setCameraMode(mode) {
+      const nextMode = mode === "inside" ? "inside" : "outside";
+      instance.state.cameraMode = nextMode;
+      instance.state.panX = 0;
+      instance.state.panY = 0;
+      if (nextMode === "inside") {
+        instance.state.targetYaw = -0.22;
+        instance.state.targetPitch = -0.08;
+        instance.state.targetZoom = 1.22;
+        instance.state.targetProjection = "perspective";
+        instance.state.activeView = "iso";
+      } else {
+        const iso = VIEW_PRESETS.iso;
+        instance.state.targetYaw = iso.yaw;
+        instance.state.targetPitch = iso.pitch;
+        instance.state.targetZoom = iso.zoom;
+        instance.state.targetProjection = iso.projection;
+        instance.state.activeView = "iso";
+      }
+      syncViewButtons();
+      syncViewCube();
+      syncViewModeButtons();
     }
 
     function resizeCanvas() {
@@ -1230,6 +1979,7 @@
     instance.viewCube = (canvas.parentElement || document).querySelector("[data-viewcube]");
     instance.viewCubeScene = (canvas.parentElement || document).querySelector("[data-viewcube-scene]");
     instance.viewButtons = Array.prototype.slice.call((canvas.parentElement || document).querySelectorAll("[data-view]"));
+    instance.viewModeButtons = Array.prototype.slice.call((canvas.parentElement || document).querySelectorAll("[data-schematic-mode]"));
     instance.viewButtons.forEach(function (button) {
       button.addEventListener("pointerdown", function (event) {
         event.stopPropagation();
@@ -1240,6 +1990,11 @@
           return;
         }
         setView(button.getAttribute("data-view"));
+      });
+    });
+    instance.viewModeButtons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        setCameraMode(button.getAttribute("data-schematic-mode"));
       });
     });
 
@@ -1311,6 +2066,7 @@
 
     syncViewButtons();
     syncViewCube();
+    syncViewModeButtons();
 
     instance.resizeObserver = typeof ResizeObserver === "function"
       ? new ResizeObserver(resizeCanvas)
@@ -1324,7 +2080,15 @@
   }
 
   function projectPoint(instance, scene, source) {
-    const local = subPoint(source, scene.center);
+    const cameraMode = instance.state.cameraMode === "inside" ? "inside" : "outside";
+    const viewTarget = cameraMode === "inside"
+      ? point(
+          clamp(scene.room.length * 0.24, 1.05, Math.max(scene.room.length - 1.1, 1.05)),
+          clamp(scene.room.width * 0.09, 0.55, Math.max(scene.room.width * 0.16, 0.85)),
+          clamp(scene.room.height * 0.36, 1.42, Math.max(scene.room.height - 0.95, 1.42))
+        )
+      : scene.center;
+    const local = subPoint(source, viewTarget);
     const cosYaw = Math.cos(instance.state.yaw);
     const sinYaw = Math.sin(instance.state.yaw);
     const cosPitch = Math.cos(instance.state.pitch);
@@ -1337,8 +2101,12 @@
     const sceneSpan = Math.max(scene.room.length, scene.room.width, scene.room.height + scene.room.serviceGap);
     const orthographic = instance.state.projection === "orthographic";
     const activeView = instance.state.activeView || "iso";
-    let horizontalSpan = Math.max(scene.room.length + scene.room.width * 0.35 + scene.room.serviceGap * 1.2, 1);
-    let verticalSpan = Math.max(scene.room.height + scene.room.width * 0.8 + 2.6, 1);
+    let horizontalSpan = cameraMode === "inside"
+      ? Math.max(scene.room.length * 0.76, 1)
+      : Math.max(scene.room.length + scene.room.width * 0.35 + scene.room.serviceGap * 1.2, 1);
+    let verticalSpan = cameraMode === "inside"
+      ? Math.max(scene.room.height + 0.7, 1)
+      : Math.max(scene.room.height + scene.room.width * 0.8 + 2.6, 1);
     if (orthographic) {
       if (activeView === "front" || activeView === "back") {
         horizontalSpan = scene.room.length + 1.4;
@@ -1355,9 +2123,11 @@
       }
     }
     const scale = Math.min(instance.width / Math.max(horizontalSpan, 1), instance.height / Math.max(verticalSpan, 1)) * (orthographic ? 0.9 : 0.82);
-    const cameraDistance = sceneSpan * 2.4 + 4.5;
+    const cameraDistance = cameraMode === "inside"
+      ? Math.max(Math.min(scene.room.length, scene.room.width) * 0.92, 4.8)
+      : sceneSpan * 2.4 + 4.5;
     const perspective = orthographic ? 1 : cameraDistance / Math.max(cameraDistance + pitchY, 0.5);
-    const verticalOffset = orthographic ? 14 : 34;
+    const verticalOffset = orthographic ? 14 : (cameraMode === "inside" ? 18 : 34);
     return {
       x: instance.width / 2 + (yawX * scale * perspective * instance.state.zoom) + instance.state.panX,
       y: instance.height / 2 - (pitchZ * scale * perspective * instance.state.zoom) + verticalOffset + instance.state.panY,
@@ -1387,9 +2157,57 @@
     }
   }
 
+  function polygonSignedArea(points) {
+    if (!points || points.length < 3) {
+      return 0;
+    }
+    let area = 0;
+    for (let index = 0; index < points.length; index += 1) {
+      const current = points[index];
+      const next = points[(index + 1) % points.length];
+      area += current.x * next.y - next.x * current.y;
+    }
+    return area / 2;
+  }
+
+  function shouldRenderObject(instance, object) {
+    if (!object) {
+      return false;
+    }
+    const cameraMode = instance.state.cameraMode === "inside" ? "inside" : "outside";
+    if (cameraMode === "outside") {
+      if (
+        object.layer === "room-ceiling-shell"
+        || object.layer === "room-trim-high"
+        || object.layer === "room-floor-shell"
+        || object.layer === "room-trim-low"
+      ) {
+        return false;
+      }
+    }
+    if (cameraMode === "inside") {
+      if (object.layer === "room-ceiling-shell" || object.layer === "room-floor-shell") {
+        return false;
+      }
+      if (object.layer === "room-wall" && object.max && object.max.y <= 0.001) {
+        return false;
+      }
+      if (object.layer === "room-trim-low" && object.max && object.max.y <= 0.14) {
+        return false;
+      }
+      if (object.layer === "room-trim-high" && object.max && object.max.y <= 0.14) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   function drawRoom(instance, scene) {
     const ctx = instance.ctx;
     const room = scene.room;
+    const wallThickness = room.wallThickness || 0.18;
+    const slabThickness = room.slabThickness || 0.16;
+    const cameraMode = instance.state.cameraMode === "inside" ? "inside" : "outside";
     const floor = [
       point(0, 0, 0),
       point(room.length, 0, 0),
@@ -1399,36 +2217,36 @@
     const ceiling = floor.map(function (entry) {
       return point(entry.x, entry.y, room.height);
     });
-    const wallA = [floor[0], floor[1], ceiling[1], ceiling[0]];
-    const wallB = [floor[1], floor[2], ceiling[2], ceiling[1]];
-    const wallC = [floor[2], floor[3], ceiling[3], ceiling[2]];
-    const wallD = [floor[3], floor[0], ceiling[0], ceiling[3]];
-
-    const faces = [
-      { points: floor, fill: FLOOR_FILL, stroke: ROOM_STROKE },
-      { points: wallA, fill: ROOM_FILL, stroke: ROOM_STROKE },
-      { points: wallB, fill: ROOM_FILL, stroke: ROOM_STROKE },
-      { points: wallC, fill: ROOM_FILL, stroke: ROOM_STROKE },
-      { points: wallD, fill: ROOM_FILL, stroke: ROOM_STROKE },
-      { points: ceiling, fill: "rgba(84, 108, 148, 0.02)", stroke: "rgba(166, 188, 222, 0.32)" }
-    ];
-
-    const projectedFaces = faces.map(function (face) {
-      const projected = face.points.map(function (entry) {
-        return projectPoint(instance, scene, entry);
-      });
-      return {
-        projected: projected,
-        fill: face.fill,
-        stroke: face.stroke,
-        depth: projected.reduce(function (sum, entry) { return sum + entry.depth; }, 0) / projected.length
-      };
-    }).sort(function (left, right) {
-      return left.depth - right.depth;
+    const outerShadow = [
+      point(-wallThickness * 1.2, -wallThickness * 1.2, -slabThickness),
+      point(room.length + wallThickness * 1.2, -wallThickness * 1.2, -slabThickness),
+      point(room.length + wallThickness * 1.2, room.width + wallThickness * 1.2, -slabThickness),
+      point(-wallThickness * 1.2, room.width + wallThickness * 1.2, -slabThickness)
+    ].map(function (entry) {
+      return projectPoint(instance, scene, entry);
     });
+    drawPolygon(ctx, outerShadow, SHADOW_FILL, null, 0);
 
-    projectedFaces.forEach(function (face) {
-      drawPolygon(ctx, face.projected, face.fill, face.stroke, 1.2);
+    const interiorFloor = floor.map(function (entry) {
+      return projectPoint(instance, scene, point(entry.x, entry.y, 0.012));
+    });
+    const interiorCeiling = ceiling.map(function (entry) {
+      return projectPoint(instance, scene, point(entry.x, entry.y, room.height - 0.012));
+    });
+    drawPolygon(ctx, interiorFloor, "rgba(125, 194, 255, 0.035)", "rgba(190, 212, 244, 0.26)", 1.1);
+    if (cameraMode === "inside") {
+      drawPolygon(ctx, interiorCeiling, "rgba(198, 212, 236, 0.03)", "rgba(192, 208, 234, 0.2)", 1.05);
+    }
+
+    [0, 1, 2, 3].forEach(function (index) {
+      const floorPoint = projectPoint(instance, scene, floor[index]);
+      const ceilingPoint = projectPoint(instance, scene, ceiling[index]);
+      ctx.beginPath();
+      ctx.moveTo(floorPoint.x, floorPoint.y);
+      ctx.lineTo(ceilingPoint.x, ceilingPoint.y);
+      ctx.strokeStyle = "rgba(188, 205, 231, 0.14)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
     });
 
     const gridSpacing = Math.max(2, Math.round(Math.min(room.length, room.width) / 8));
@@ -1452,31 +2270,64 @@
       ctx.lineWidth = 1;
       ctx.stroke();
     }
+
+    if (cameraMode === "inside") {
+      const ceilingGridColor = "rgba(179, 198, 226, 0.12)";
+      for (let x = 0; x <= room.length + 0.001; x += gridSpacing) {
+        const start = projectPoint(instance, scene, point(x, 0, room.height - 0.01));
+        const end = projectPoint(instance, scene, point(x, room.width, room.height - 0.01));
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.strokeStyle = ceilingGridColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      for (let y = 0; y <= room.width + 0.001; y += gridSpacing) {
+        const start = projectPoint(instance, scene, point(0, y, room.height - 0.01));
+        const end = projectPoint(instance, scene, point(room.length, y, room.height - 0.01));
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.strokeStyle = ceilingGridColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
   }
 
   function drawObjects(instance, scene) {
     const ctx = instance.ctx;
     const faces = [];
+    const enableBackfaceCulling = instance.state.projection !== "orthographic";
 
     scene.objects.forEach(function (object) {
       if (object.kind !== "box") {
+        return;
+      }
+      if (!shouldRenderObject(instance, object)) {
         return;
       }
       faceListForBox(object.min, object.max, object.style).forEach(function (face) {
         const projected = face.points.map(function (entry) {
           return projectPoint(instance, scene, entry);
         });
+        const signedArea = polygonSignedArea(projected);
+        if (enableBackfaceCulling && signedArea <= 0.05) {
+          return;
+        }
         faces.push({
           projected: projected,
           fill: face.fill,
           stroke: face.stroke,
-          depth: projected.reduce(function (sum, entry) { return sum + entry.depth; }, 0) / projected.length
+          depth: projected.reduce(function (sum, entry) { return sum + entry.depth; }, 0) / projected.length,
+          signedArea: signedArea
         });
       });
     });
 
     faces.sort(function (left, right) {
-      return left.depth - right.depth;
+      return right.depth - left.depth;
     });
 
     faces.forEach(function (face) {

@@ -306,6 +306,78 @@
   .field input:focus, .field select:focus { border-color: var(--accent); }
   .field select option { background: var(--bg3); }
   .hint { font-size: 10px; color: var(--text3); font-family: var(--mono); }
+  .envelope-matrix { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .envelope-box {
+    background: linear-gradient(180deg, rgba(26,30,42,0.92), rgba(19,22,30,0.96));
+    border: 1px solid var(--border);
+    border-radius: var(--r2);
+    padding: 14px;
+  }
+  .envelope-box-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .envelope-box-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--text2);
+  }
+  .envelope-box-note {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text3);
+  }
+  .envelope-list { display: grid; gap: 10px; }
+  .envelope-row {
+    display: grid;
+    grid-template-columns: 56px 1fr 1fr;
+    gap: 10px;
+    align-items: end;
+    padding: 10px;
+    border-radius: var(--r);
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.02);
+  }
+  .envelope-index {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--r);
+    border: 1px solid rgba(0,201,167,0.12);
+    background: rgba(0,201,167,0.08);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+  }
+  .envelope-summary-field { justify-content: flex-end; }
+  .envelope-summary {
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    padding: 9px 11px;
+    border-radius: var(--r);
+    border: 1px solid rgba(255,255,255,0.07);
+    background: rgba(255,255,255,0.03);
+    color: var(--text);
+    font-size: 11px;
+    line-height: 1.5;
+    font-family: var(--mono);
+  }
+  .envelope-empty {
+    padding: 12px;
+    border-radius: var(--r);
+    border: 1px dashed rgba(255,255,255,0.12);
+    color: var(--text3);
+    font-size: 11px;
+    font-family: var(--mono);
+    text-align: center;
+  }
 
   /* ── BUTTONS ── */
   .btn { display: inline-flex; align-items: center; gap: 7px; padding: 9px 18px; border-radius: var(--r); border: none; cursor: pointer; font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em; font-weight: 500; transition: all .15s; }
@@ -451,9 +523,46 @@
   .schematic-viewcube,
   .schematic-viewcube-shell,
   .schematic-viewcube-scene,
+  .schematic-mode-switch,
+  .schematic-mode-btn,
   .schematic-view-iso,
   .schematic-cube-face,
   .schematic-orbit-tip { pointer-events: auto; }
+  .schematic-mode-switch {
+    display: inline-grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    padding: 4px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(8,12,18,0.88);
+    box-shadow: 0 16px 28px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.05);
+    backdrop-filter: blur(12px);
+  }
+  .schematic-mode-btn {
+    min-width: 82px;
+    min-height: 32px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #c8d5eb;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: background .18s ease, border-color .18s ease, color .18s ease, box-shadow .18s ease;
+  }
+  .schematic-mode-btn:hover {
+    border-color: rgba(156,214,255,0.38);
+    color: #eef6ff;
+  }
+  .schematic-mode-btn.is-active {
+    background: linear-gradient(180deg, rgba(56,128,214,0.98), rgba(27,86,170,0.98));
+    border-color: rgba(164,223,255,0.70);
+    color: #fbfdff;
+    box-shadow: 0 10px 20px rgba(51,123,214,0.24), 0 0 0 1px rgba(215,242,255,0.16) inset;
+  }
   .schematic-viewcube-shell {
     display: grid;
     gap: 10px;
@@ -693,6 +802,7 @@
   @media (max-width: 900px) {
     .sidebar { width: 180px; }
     .fg { grid-template-columns: 1fr 1fr; }
+    .envelope-matrix { grid-template-columns: 1fr; }
     .results-grid { grid-template-columns: 1fr 1fr; }
     .results-grid-5 { grid-template-columns: 1fr 1fr; }
     .duct-result { grid-template-columns: 1fr 1fr; }
@@ -707,6 +817,8 @@
   @media (max-width: 640px) {
     .sidebar { display: none; }
     .fg { grid-template-columns: 1fr; }
+    .envelope-row { grid-template-columns: 1fr; }
+    .envelope-index { min-height: 36px; }
     .results-grid { grid-template-columns: 1fr 1fr; }
     .report-brand-word { font-size: 28px; }
     .auth-shell { padding: 18px 12px; }
@@ -1078,28 +1190,36 @@
         <div class="field"><label>HEIGHT (m)</label><input type="number" id="ht" value="3" step="0.1"><span class="hint">Floor to ceiling</span></div>
       </div>
       <div class="fg" style="margin-top:14px;">
-        <div class="field"><label>WINDOW AREA (m²)</label><input type="number" id="win_area" value="6" step="0.1"></div>
-        <div class="field"><label>WINDOW ORIENTATION</label>
-          <select id="win_orient">
-            <option value="N">North</option>
-            <option value="NE">North-East</option>
-            <option value="E">East</option>
-            <option value="SE" selected>South-East</option>
-            <option value="S">South</option>
-            <option value="SW">South-West</option>
-            <option value="W">West</option>
-            <option value="NW">North-West</option>
-          </select>
+        <div class="field"><label>NO. OF WINDOWS</label><input type="number" id="window_count" value="1" min="0" step="1"><span class="hint">Create one entry per window area and orientation</span></div>
+        <div class="field"><label>NO. OF EXTERNAL WALLS</label><input type="number" id="wall_count" value="2" min="0" step="1"><span class="hint">Each exposed wall may face a different orientation</span></div>
+        <div class="field"><label>CEILING AREA (m²)</label><input type="number" id="ceiling_area" value="80" step="0.1"><span class="hint">Defaults to plan area unless you override it</span></div>
+      </div>
+      <div class="fg" style="margin-top:14px;">
+        <div class="field"><label>FLOOR AREA (m²)</label><input type="number" id="floor_area" value="80" step="0.1"><span class="hint">Used if floor / ground exposure is the active load path</span></div>
+        <div class="field envelope-summary-field"><label>WINDOW SUMMARY</label><div class="envelope-summary" id="window-summary-chip">1 window · 6.00 m² · SE</div></div>
+        <div class="field envelope-summary-field"><label>WALL SUMMARY</label><div class="envelope-summary" id="wall-summary-chip">2 walls · 54.00 m² gross</div></div>
+      </div>
+      <div class="envelope-matrix" style="margin-top:14px;">
+        <div class="envelope-box">
+          <div class="envelope-box-head">
+            <div class="envelope-box-title">WINDOW SCHEDULE</div>
+            <div class="envelope-box-note">AREA + ORIENTATION</div>
+          </div>
+          <div class="envelope-list" id="window-config-list"></div>
         </div>
-        <div class="field"><label>WALL EXPOSURE</label>
-          <select id="wall_exp">
-            <option value="1">1 External Wall</option>
-            <option value="2" selected>2 External Walls</option>
-            <option value="3">3 External Walls</option>
-            <option value="4">Corner – All Exposed</option>
-          </select>
+        <div class="envelope-box">
+          <div class="envelope-box-head">
+            <div class="envelope-box-title">EXTERNAL WALL SCHEDULE</div>
+            <div class="envelope-box-note">AREA + ORIENTATION</div>
+          </div>
+          <div class="envelope-list" id="wall-config-list"></div>
         </div>
       </div>
+      <input type="hidden" id="window_config" value='[{"area":6,"orientation":"SE"}]'>
+      <input type="hidden" id="wall_config" value='[{"area":30,"orientation":"S"},{"area":24,"orientation":"E"}]'>
+      <input type="hidden" id="win_area" value="6">
+      <input type="hidden" id="win_orient" value="SE">
+      <input type="hidden" id="wall_exp" value="2">
     </div>
 
     <div class="card">
@@ -1888,14 +2008,18 @@
         <canvas id="schematic3d-canvas" class="schematic-canvas" width="1400" height="760" aria-label="3D HVAC schematic visualization"></canvas>
         <div class="schematic-overlay">
           <div class="schematic-overlay-note" id="schematic3d-note">
-            Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset to ISO. Use the view cube for top, bottom, left, right, front, and back views. Air animation is illustrative only.
+            Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset to ISO. Use Outside View for an uncluttered duct overview and Inside View to turn the ceiling on and look into the room. Air animation is illustrative only.
           </div>
         </div>
         <div class="schematic-stage-controls">
+          <div class="schematic-mode-switch" aria-label="3D schematic view mode">
+            <button type="button" class="schematic-mode-btn is-active" data-schematic-mode="outside">OUTSIDE</button>
+            <button type="button" class="schematic-mode-btn" data-schematic-mode="inside">INSIDE</button>
+          </div>
           <div class="schematic-viewcube-shell">
             <button type="button" class="schematic-view-iso" data-view="iso">ISO</button>
             <div class="schematic-viewcube-scene" data-viewcube-scene aria-label="Rotatable view cube">
-              <div class="schematic-viewcube" id="schematic3d-viewcube" data-viewcube aria-hidden="true">
+              <div class="schematic-viewcube" id="schematic3d-viewcube" data-viewcube aria-label="3D view cube">
                 <button type="button" class="schematic-cube-face" data-view="front">FRONT</button>
                 <button type="button" class="schematic-cube-face" data-view="back">BACK</button>
                 <button type="button" class="schematic-cube-face" data-view="left">LEFT</button>

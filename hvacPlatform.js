@@ -24,9 +24,15 @@
     "len",
     "wid",
     "ht",
+    "window_count",
+    "window_config",
     "win_area",
     "win_orient",
+    "wall_count",
+    "wall_config",
     "wall_exp",
+    "ceiling_area",
+    "floor_area",
     "roof_exp",
     "occ",
     "occ_act",
@@ -85,9 +91,15 @@
     len: "10",
     wid: "8",
     ht: "3",
+    window_count: "1",
+    window_config: '[{"area":6,"orientation":"SE"}]',
     win_area: "6",
     win_orient: "SE",
+    wall_count: "2",
+    wall_config: '[{"area":30,"orientation":"S"},{"area":24,"orientation":"E"}]',
     wall_exp: "2",
+    ceiling_area: "80",
+    floor_area: "80",
     roof_exp: "top_floor",
     occ: "10",
     occ_act: "seated_light",
@@ -119,6 +131,7 @@
   const platform = {
     initialized: false,
     inputListenersBound: false,
+    envelopeListenersBound: false,
     authListenersBound: false,
     projectManagerReady: false,
     energyRequestSerial: 0,
@@ -129,6 +142,29 @@
     licenseInvite: null,
     licenseInviteNotice: null,
     adminCompanyUsers: []
+  };
+
+  const ORIENTATION_SEQUENCE = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const ORIENTATION_LABELS = {
+    N: "North",
+    NE: "North-East",
+    E: "East",
+    SE: "South-East",
+    S: "South",
+    SW: "South-West",
+    W: "West",
+    NW: "North-West"
+  };
+  const DEFAULT_WALL_ORIENTATIONS = ["S", "E", "N", "W", "SE", "SW", "NE", "NW"];
+  const WALL_ORIENTATION_FACTORS = {
+    N: 0.90,
+    NE: 0.98,
+    E: 1.10,
+    SE: 1.14,
+    S: 1.04,
+    SW: 1.14,
+    W: 1.10,
+    NW: 0.98
   };
 
   function byId(id) {
@@ -183,6 +219,313 @@
 
   function copyJson(value) {
     return value == null ? value : JSON.parse(JSON.stringify(value));
+  }
+
+  function normalizeOrientation(value, fallback) {
+    const key = String(value || fallback || "SE").toUpperCase();
+    return ORIENTATION_SEQUENCE.indexOf(key) !== -1 ? key : (fallback || "SE");
+  }
+
+  function orientationLabel(value) {
+    return ORIENTATION_LABELS[normalizeOrientation(value, "SE")] || value || "—";
+  }
+
+  function safeJsonParseArray(value) {
+    if (!value) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function readEnvelopeSeed() {
+    return {
+      len: valueOf("len", DEFAULT_INPUTS.len),
+      wid: valueOf("wid", DEFAULT_INPUTS.wid),
+      ht: valueOf("ht", DEFAULT_INPUTS.ht),
+      window_count: valueOf("window_count", DEFAULT_INPUTS.window_count),
+      window_config: valueOf("window_config", DEFAULT_INPUTS.window_config),
+      win_area: valueOf("win_area", DEFAULT_INPUTS.win_area),
+      win_orient: valueOf("win_orient", DEFAULT_INPUTS.win_orient),
+      wall_count: valueOf("wall_count", DEFAULT_INPUTS.wall_count),
+      wall_config: valueOf("wall_config", DEFAULT_INPUTS.wall_config),
+      wall_exp: valueOf("wall_exp", DEFAULT_INPUTS.wall_exp),
+      ceiling_area: valueOf("ceiling_area", DEFAULT_INPUTS.ceiling_area),
+      floor_area: valueOf("floor_area", DEFAULT_INPUTS.floor_area)
+    };
+  }
+
+  function orientationSelectOptions(selected) {
+    const active = normalizeOrientation(selected, "SE");
+    return ORIENTATION_SEQUENCE.map(function (orientation) {
+      return '<option value="' + orientation + '"' + (orientation === active ? " selected" : "") + ">"
+        + orientationLabel(orientation)
+        + "</option>";
+    }).join("");
+  }
+
+  function wallDisplayFace(orientation) {
+    const normalized = normalizeOrientation(orientation, "S");
+    if (normalized === "E") {
+      return "east";
+    }
+    if (normalized === "W") {
+      return "west";
+    }
+    if (normalized === "NE" || normalized === "N" || normalized === "NW") {
+      return "north";
+    }
+    return "south";
+  }
+
+  function suggestedWallAreaForOrientation(length, width, height, orientation) {
+    const face = wallDisplayFace(orientation);
+    const wallSpan = face === "east" || face === "west" ? width : length;
+    return roundTo(Math.max(wallSpan, 0) * Math.max(height, 0), 2);
+  }
+
+  function buildDefaultWindowEntries(seed, count, existingEntries) {
+    const safeCount = clamp(count, 0, 12);
+    const totalArea = Math.max(parseFloat(seed.win_area) || 0, 0);
+    const fallbackOrientation = normalizeOrientation(seed.win_orient, "SE");
+    const existing = Array.isArray(existingEntries) ? existingEntries : [];
+    const perWindowArea = safeCount > 0 ? roundTo(totalArea / safeCount, 2) : 0;
+    const rows = [];
+    for (let index = 0; index < safeCount; index += 1) {
+      const existingEntry = existing[index] || {};
+      rows.push({
+        area: Math.max(parseFloat(existingEntry.area), 0) || perWindowArea,
+        orientation: normalizeOrientation(existingEntry.orientation, fallbackOrientation)
+      });
+    }
+    return rows;
+  }
+
+  function buildDefaultWallEntries(seed, count, existingEntries) {
+    const safeCount = clamp(count, 0, 12);
+    const length = parseFloat(seed.len) || 0;
+    const width = parseFloat(seed.wid) || 0;
+    const height = parseFloat(seed.ht) || 0;
+    const existing = Array.isArray(existingEntries) ? existingEntries : [];
+    const rows = [];
+    for (let index = 0; index < safeCount; index += 1) {
+      const existingEntry = existing[index] || {};
+      const fallbackOrientation = DEFAULT_WALL_ORIENTATIONS[index] || "S";
+      const orientation = normalizeOrientation(existingEntry.orientation, fallbackOrientation);
+      rows.push({
+        area: Math.max(parseFloat(existingEntry.area), 0) || suggestedWallAreaForOrientation(length, width, height, orientation),
+        orientation: orientation
+      });
+    }
+    return rows;
+  }
+
+  function resolveEnvelopeCount(rawCount, fallbackCount) {
+    const parsed = parseInt(rawCount, 10);
+    if (Number.isFinite(parsed)) {
+      return clamp(parsed, 0, 12);
+    }
+    return clamp(fallbackCount || 0, 0, 12);
+  }
+
+  function normalizeWindowEntries(seed) {
+    const parsedEntries = safeJsonParseArray(seed.window_config);
+    const legacyCount = resolveEnvelopeCount(
+      seed.window_count,
+      parsedEntries.length || ((parseFloat(seed.win_area) || 0) > 0 ? 1 : 0)
+    );
+    const defaultEntries = buildDefaultWindowEntries(seed, legacyCount, parsedEntries);
+    return defaultEntries.map(function (entry) {
+      return {
+        area: roundTo(Math.max(parseFloat(entry.area) || 0, 0), 2),
+        orientation: normalizeOrientation(entry.orientation, normalizeOrientation(seed.win_orient, "SE"))
+      };
+    });
+  }
+
+  function normalizeWallEntries(seed) {
+    const parsedEntries = safeJsonParseArray(seed.wall_config);
+    const legacyCount = resolveEnvelopeCount(
+      seed.wall_count,
+      parsedEntries.length || (parseInt(seed.wall_exp, 10) || 0)
+    );
+    const defaultEntries = buildDefaultWallEntries(seed, legacyCount, parsedEntries);
+    return defaultEntries.map(function (entry) {
+      return {
+        area: roundTo(Math.max(parseFloat(entry.area) || 0, 0), 2),
+        orientation: normalizeOrientation(entry.orientation, "S")
+      };
+    });
+  }
+
+  function areaByOrientation(entries) {
+    return entries.reduce(function (accumulator, entry) {
+      const key = normalizeOrientation(entry.orientation, "SE");
+      accumulator[key] = roundTo((accumulator[key] || 0) + (parseFloat(entry.area) || 0), 2);
+      return accumulator;
+    }, {});
+  }
+
+  function dominantOrientationFromAreas(areaMap, fallback) {
+    return ORIENTATION_SEQUENCE.reduce(function (best, orientation) {
+      const value = areaMap[orientation] || 0;
+      if (value > best.area) {
+        return { orientation: orientation, area: value };
+      }
+      return best;
+    }, { orientation: fallback || "SE", area: -1 }).orientation;
+  }
+
+  function summarizeOrientationAreas(areaMap, unit) {
+    const rows = ORIENTATION_SEQUENCE.filter(function (orientation) {
+      return (areaMap[orientation] || 0) > 0.001;
+    }).map(function (orientation) {
+      return orientation + " " + formatNumber(areaMap[orientation], 2) + (unit ? " " + unit : "");
+    });
+    return rows.length ? rows.join(" · ") : "None";
+  }
+
+  function windowRowMarkup(entry, index) {
+    return '<div class="envelope-row">'
+      + '<div class="envelope-index">W' + (index + 1) + "</div>"
+      + '<div class="field"><label>AREA (m²)</label><input type="number" class="js-window-area" value="' + formatNumber(entry.area, 2) + '" step="0.1" min="0"></div>'
+      + '<div class="field"><label>ORIENTATION</label><select class="js-window-orientation">' + orientationSelectOptions(entry.orientation) + "</select></div>"
+      + "</div>";
+  }
+
+  function wallRowMarkup(entry, index) {
+    return '<div class="envelope-row">'
+      + '<div class="envelope-index">WL' + (index + 1) + "</div>"
+      + '<div class="field"><label>AREA (m²)</label><input type="number" class="js-wall-area" value="' + formatNumber(entry.area, 2) + '" step="0.1" min="0"></div>'
+      + '<div class="field"><label>ORIENTATION</label><select class="js-wall-orientation">' + orientationSelectOptions(entry.orientation) + "</select></div>"
+      + "</div>";
+  }
+
+  function renderEnvelopeEditors(seed) {
+    const windowList = byId("window-config-list");
+    const wallList = byId("wall-config-list");
+    if (!windowList || !wallList) {
+      return;
+    }
+    const windows = normalizeWindowEntries(seed || readEnvelopeSeed());
+    const walls = normalizeWallEntries(seed || readEnvelopeSeed());
+    windowList.innerHTML = windows.length
+      ? windows.map(windowRowMarkup).join("")
+      : '<div class="envelope-empty">No windows entered for this room.</div>';
+    wallList.innerHTML = walls.length
+      ? walls.map(wallRowMarkup).join("")
+      : '<div class="envelope-empty">No external walls entered for this room.</div>';
+    syncEnvelopeConfigsFromUi();
+  }
+
+  function envelopeRowCount(listId) {
+    const list = byId(listId);
+    return list ? list.querySelectorAll(".envelope-row").length : 0;
+  }
+
+  function commitEnvelopeCount(fieldId) {
+    const element = byId(fieldId);
+    if (!element) {
+      return;
+    }
+    const listId = fieldId === "window_count" ? "window-config-list" : "wall-config-list";
+    const desiredCount = clamp(parseInt(element.value, 10) || 0, 0, 12);
+    element.value = String(desiredCount);
+    if (desiredCount !== envelopeRowCount(listId)) {
+      renderEnvelopeEditors(readEnvelopeSeed());
+      return;
+    }
+    syncEnvelopeConfigsFromUi();
+  }
+
+  function syncEnvelopeSummaryChips(windowEntries, wallEntries) {
+    const windowChip = byId("window-summary-chip");
+    const wallChip = byId("wall-summary-chip");
+    if (windowChip) {
+      const windowAreaMap = areaByOrientation(windowEntries);
+      const windowCount = windowEntries.length;
+      const totalWindowArea = windowEntries.reduce(function (sum, entry) {
+        return sum + (parseFloat(entry.area) || 0);
+      }, 0);
+      windowChip.textContent = windowCount
+        ? windowCount + " window" + (windowCount > 1 ? "s" : "") + " · " + formatNumber(totalWindowArea, 2) + " m² · " + summarizeOrientationAreas(windowAreaMap, "m²")
+        : "No windows entered";
+    }
+    if (wallChip) {
+      const wallAreaMap = areaByOrientation(wallEntries);
+      const wallCount = wallEntries.length;
+      const totalWallArea = wallEntries.reduce(function (sum, entry) {
+        return sum + (parseFloat(entry.area) || 0);
+      }, 0);
+      wallChip.textContent = wallCount
+        ? wallCount + " wall" + (wallCount > 1 ? "s" : "") + " · " + formatNumber(totalWallArea, 2) + " m² gross · " + summarizeOrientationAreas(wallAreaMap, "m²")
+        : "No external walls entered";
+    }
+  }
+
+  function syncEnvelopeConfigsFromUi() {
+    const windowList = byId("window-config-list");
+    const wallList = byId("wall-config-list");
+    if (!windowList || !wallList) {
+      return;
+    }
+
+    const windows = Array.from(windowList.querySelectorAll(".envelope-row")).map(function (row) {
+      return {
+        area: roundTo(Math.max(parseFloat((row.querySelector(".js-window-area") || {}).value) || 0, 0), 2),
+        orientation: normalizeOrientation((row.querySelector(".js-window-orientation") || {}).value, "SE")
+      };
+    }).filter(function (entry) {
+      return entry.area > 0.001 || entry.orientation;
+    });
+
+    const walls = Array.from(wallList.querySelectorAll(".envelope-row")).map(function (row) {
+      return {
+        area: roundTo(Math.max(parseFloat((row.querySelector(".js-wall-area") || {}).value) || 0, 0), 2),
+        orientation: normalizeOrientation((row.querySelector(".js-wall-orientation") || {}).value, "S")
+      };
+    }).filter(function (entry) {
+      return entry.area > 0.001 || entry.orientation;
+    });
+
+    const windowAreaMap = areaByOrientation(windows);
+    const totalWindowArea = windows.reduce(function (sum, entry) {
+      return sum + (parseFloat(entry.area) || 0);
+    }, 0);
+    const dominantWindowOrientation = dominantOrientationFromAreas(windowAreaMap, valueOf("win_orient", "SE"));
+
+    setValue("window_count", String(windows.length));
+    setValue("wall_count", String(walls.length));
+    setValue("window_config", JSON.stringify(windows));
+    setValue("wall_config", JSON.stringify(walls));
+    setValue("win_area", String(roundTo(totalWindowArea, 2)));
+    setValue("win_orient", dominantWindowOrientation);
+    setValue("wall_exp", String(walls.length));
+    syncEnvelopeSummaryChips(windows, walls);
+  }
+
+  function syncPlanAreaFields(force) {
+    ["ceiling_area", "floor_area"].forEach(function (fieldId) {
+      const element = byId(fieldId);
+      if (!element) {
+        return;
+      }
+      const plannedArea = roundTo((numberOf("len", parseFloat(DEFAULT_INPUTS.len)) || 0) * (numberOf("wid", parseFloat(DEFAULT_INPUTS.wid)) || 0), 2);
+      const current = parseFloat(element.value);
+      const lastAuto = parseFloat(element.dataset.autoValue || "");
+      const manuallyOverridden = element.dataset.manual === "true";
+      if (force || !Number.isFinite(current) || current <= 0 || !manuallyOverridden || (Number.isFinite(lastAuto) && Math.abs(current - lastAuto) < 0.05)) {
+        element.value = formatNumber(plannedArea, 2);
+        element.dataset.autoValue = String(plannedArea);
+        if (force) {
+          element.dataset.manual = "false";
+        }
+      }
+    });
   }
 
   function setReadOnlyState(id, locked) {
@@ -2032,6 +2375,10 @@
   }
 
   function captureInputs() {
+    syncPlanAreaFields(false);
+    commitEnvelopeCount("window_count");
+    commitEnvelopeCount("wall_count");
+    syncEnvelopeConfigsFromUi();
     const snapshot = {};
     ROOM_FIELD_IDS.forEach(function (fieldId) {
       snapshot[fieldId] = valueOf(fieldId, DEFAULT_INPUTS[fieldId] || "");
@@ -2048,6 +2395,18 @@
         setValue(fieldId, DEFAULT_INPUTS[fieldId]);
       }
     });
+    ["ceiling_area", "floor_area"].forEach(function (fieldId) {
+      const element = byId(fieldId);
+      if (!element) {
+        return;
+      }
+      const plannedArea = roundTo((parseFloat(inputs.len || DEFAULT_INPUTS.len) || 0) * (parseFloat(inputs.wid || DEFAULT_INPUTS.wid) || 0), 2);
+      const current = parseFloat(element.value);
+      element.dataset.autoValue = String(plannedArea);
+      element.dataset.manual = Number.isFinite(current) && Math.abs(current - plannedArea) > 0.05 ? "true" : "false";
+    });
+    syncPlanAreaFields(false);
+    renderEnvelopeEditors(inputs);
   }
 
   function readRates() {
@@ -2098,6 +2457,130 @@
       + "</div>";
   }
 
+  function buildEnvelopeBreakdown(inputs, length, width, height) {
+    const seed = Object.assign({}, inputs || {});
+    const windows = normalizeWindowEntries(seed).filter(function (entry) {
+      return (parseFloat(entry.area) || 0) > 0.001;
+    });
+    const walls = normalizeWallEntries(seed).filter(function (entry) {
+      return (parseFloat(entry.area) || 0) > 0.001;
+    });
+    const windowAreaByOrientation = areaByOrientation(windows);
+    const wallGrossAreaByOrientation = areaByOrientation(walls);
+    const dominantWindowOrientation = dominantOrientationFromAreas(windowAreaByOrientation, inputs.win_orient || "SE");
+    const windowOrientationCount = ORIENTATION_SEQUENCE.filter(function (orientation) {
+      return (windowAreaByOrientation[orientation] || 0) > 0.001;
+    }).length;
+    const windowAreaTotal = windows.reduce(function (sum, entry) {
+      return sum + (parseFloat(entry.area) || 0);
+    }, 0);
+    const wallGrossArea = walls.reduce(function (sum, entry) {
+      return sum + (parseFloat(entry.area) || 0);
+    }, 0);
+
+    const wallsByOrientation = walls.reduce(function (accumulator, wall) {
+      const key = normalizeOrientation(wall.orientation, "S");
+      if (!accumulator[key]) {
+        accumulator[key] = [];
+      }
+      accumulator[key].push(wall);
+      return accumulator;
+    }, {});
+
+    const wallNetAreaByOrientation = {};
+    const detailedWalls = [];
+    ORIENTATION_SEQUENCE.forEach(function (orientation) {
+      const wallEntries = wallsByOrientation[orientation] || [];
+      const grossOrientationArea = wallEntries.reduce(function (sum, entry) {
+        return sum + (parseFloat(entry.area) || 0);
+      }, 0);
+      const netOrientationArea = Math.max(0, grossOrientationArea - (windowAreaByOrientation[orientation] || 0));
+      wallNetAreaByOrientation[orientation] = roundTo(netOrientationArea, 2);
+      wallEntries.forEach(function (entry, index) {
+        const grossArea = Math.max(parseFloat(entry.area) || 0, 0);
+        const share = grossOrientationArea > 0 ? grossArea / grossOrientationArea : 0;
+        detailedWalls.push({
+          index: detailedWalls.length + 1,
+          orientation: orientation,
+          grossArea: roundTo(grossArea, 2),
+          netArea: roundTo(netOrientationArea * share, 2),
+          orientationFactor: WALL_ORIENTATION_FACTORS[orientation] || 1
+        });
+      });
+    });
+
+    const ceilingArea = Math.max(parseFloat(inputs.ceiling_area) || (length * width) || 0, 0);
+    const floorArea = Math.max(parseFloat(inputs.floor_area) || (length * width) || 0, 0);
+    const roofExposure = inputs.roof_exp || "top_floor";
+    const roofLoadArea = roofExposure === "ground" ? floorArea : ceilingArea;
+
+    return {
+      windows: windows.map(function (entry, index) {
+        return {
+          index: index + 1,
+          area: roundTo(Math.max(parseFloat(entry.area) || 0, 0), 2),
+          orientation: normalizeOrientation(entry.orientation, dominantWindowOrientation)
+        };
+      }),
+      walls: detailedWalls,
+      windowAreaByOrientation: windowAreaByOrientation,
+      wallGrossAreaByOrientation: wallGrossAreaByOrientation,
+      wallNetAreaByOrientation: wallNetAreaByOrientation,
+      dominantWindowOrientation: dominantWindowOrientation,
+      activeWindowOrientationLabel: windowOrientationCount > 1 ? "Mixed windows" : orientationLabel(dominantWindowOrientation),
+      windowAreaTotal: roundTo(windowAreaTotal, 2),
+      wallGrossArea: roundTo(wallGrossArea, 2),
+      wallNetArea: roundTo(detailedWalls.reduce(function (sum, entry) {
+        return sum + entry.netArea;
+      }, 0), 2),
+      ceilingArea: roundTo(ceilingArea, 2),
+      floorArea: roundTo(floorArea, 2),
+      roofLoadArea: roundTo(roofLoadArea, 2)
+    };
+  }
+
+  function buildWeightedSolarProfile(latitude, dayOfYear, solarHour, envelope) {
+    const orientationSeries = SolarEngine.buildOrientationSeries(latitude, dayOfYear, 8, 17);
+    const seriesByOrientation = {};
+    orientationSeries.forEach(function (series) {
+      seriesByOrientation[series.orientation] = series;
+    });
+    const totalWindowArea = Math.max(envelope.windowAreaTotal || 0, 0);
+    const dominantOrientation = envelope.dominantWindowOrientation || "SE";
+    const referenceSeries = seriesByOrientation[dominantOrientation] || orientationSeries[0];
+    const activeCurve = (referenceSeries && referenceSeries.points ? referenceSeries.points : []).map(function (pointRow, index) {
+      const weightedShgf = totalWindowArea > 0
+        ? ORIENTATION_SEQUENCE.reduce(function (sum, orientation) {
+            const orientationSeriesEntry = seriesByOrientation[orientation];
+            const pointEntry = orientationSeriesEntry && orientationSeriesEntry.points[index];
+            return sum + ((envelope.windowAreaByOrientation[orientation] || 0) * ((pointEntry && pointEntry.shgf) || 0));
+          }, 0) / totalWindowArea
+        : 0;
+      return {
+        hour: pointRow.hour,
+        shgf: roundTo(weightedShgf, 1),
+        altitude: pointRow.altitude,
+        azimuth: pointRow.azimuth
+      };
+    });
+    const designPoint = activeCurve.find(function (row) {
+      return row.hour === solarHour;
+    }) || activeCurve[activeCurve.length - 1] || {
+      hour: solarHour,
+      shgf: 0,
+      altitude: 0,
+      azimuth: 0
+    };
+
+    return {
+      point: designPoint,
+      curve: activeCurve,
+      orientationSeries: orientationSeries,
+      activeOrientation: dominantOrientation,
+      activeOrientationLabel: totalWindowArea > 0 ? envelope.activeWindowOrientationLabel : "No windows"
+    };
+  }
+
   function calculateRoom(inputs) {
     const length = parseFloat(inputs.len) || 0;
     const width = parseFloat(inputs.wid) || 0;
@@ -2108,9 +2591,6 @@
     const freshAirPerPerson = parseFloat(inputs.fresh_cfm) || 0;
     const lightingLoad = parseFloat(inputs.lighting) || 0;
     const equipmentLoad = parseFloat(inputs.equip) || 0;
-    const windowArea = parseFloat(inputs.win_area) || 0;
-    const windowOrientation = inputs.win_orient || "SE";
-    const wallExposure = parseInt(inputs.wall_exp, 10) || 2;
     const roofExposure = inputs.roof_exp || "top_floor";
     const outdoorDryBulb = parseFloat(inputs.out_dbt) || 40;
     const outdoorWetBulb = parseFloat(inputs.out_wbt) || 26;
@@ -2127,6 +2607,7 @@
     const solarHour = parseInt(inputs.solar_hour, 10) || 15;
     const elevation = parseFloat(inputs.out_elev) || 216;
     const inputSafetyFactor = parseFloat(inputs.sf) || 10;
+    const envelope = buildEnvelopeBreakdown(inputs, length, width, height);
 
     setValue("out_rh", outdoorRelativeHumidity.toFixed(0));
 
@@ -2136,18 +2617,23 @@
     const lightingSensible = area * lightingLoad * 0.9;
     const equipmentSensible = area * equipmentLoad * 0.8;
 
-    const solarPoint = SolarEngine.hourlySHGF(latitude, dayOfYear, solarHour, windowOrientation);
-    const solarCurve = SolarEngine.hourlyCurve(latitude, dayOfYear, windowOrientation, 8, 17);
-    const orientationSeries = SolarEngine.buildOrientationSeries(latitude, dayOfYear, 8, 17);
-    const windowSensible = windowArea * solarPoint.shgf * shadingCoefficient * coolingLoadFactor;
+    const solarProfile = buildWeightedSolarProfile(latitude, dayOfYear, solarHour, envelope);
+    const solarPoint = solarProfile.point;
+    const solarCurve = solarProfile.curve;
+    const orientationSeries = solarProfile.orientationSeries;
+    const windowSensible = envelope.windows.reduce(function (sum, windowEntry) {
+      const windowPoint = SolarEngine.hourlySHGF(latitude, dayOfYear, solarHour, windowEntry.orientation);
+      return sum + (windowEntry.area * windowPoint.shgf * shadingCoefficient * coolingLoadFactor);
+    }, 0);
 
-    const wallPerimeter = 2 * (length + width);
-    const grossWallArea = wallPerimeter * height;
-    const externalWallArea = Math.max(0, grossWallArea * (wallExposure / 4) - windowArea);
-    const wallCltd = CLTD_WALL[wallExposure] || CLTD_WALL[2];
+    const wallExposure = envelope.walls.length;
+    const externalWallArea = envelope.wallNetArea;
+    const wallCltd = CLTD_WALL[Math.min(Math.max(wallExposure, 1), 4)] || CLTD_WALL[2];
     const roofCltd = CLTD_ROOF_MAP[roofExposure] || CLTD_ROOF_MAP.top_floor;
-    const wallSensible = Math.max(0, wallUValue * externalWallArea * wallCltd);
-    const roofSensible = Math.max(0, roofUValue * area * roofCltd);
+    const wallSensible = Math.max(0, envelope.walls.reduce(function (sum, wallEntry) {
+      return sum + (wallUValue * wallEntry.netArea * wallCltd * (wallEntry.orientationFactor || 1));
+    }, 0));
+    const roofSensible = Math.max(0, roofUValue * envelope.roofLoadArea * roofCltd);
 
     const pressurePa = pressureAtElevation(elevation);
     const freshAirCfm = occupants * freshAirPerPerson;
@@ -2520,6 +3006,7 @@
       inputs: inputs,
       area: area,
       volume: volume,
+      envelope: envelope,
       outdoorRelativeHumidity: outdoorRelativeHumidity,
       peopleSensible: peopleSensible,
       peopleLatent: peopleLatent,
@@ -2672,12 +3159,30 @@
         designHour: solarHour,
         point: solarPoint,
         curve: solarCurve,
-        orientationSeries: orientationSeries
+        orientationSeries: orientationSeries,
+        activeOrientation: solarProfile.activeOrientation,
+        activeOrientationLabel: solarProfile.activeOrientationLabel
       }
     };
   }
 
   function renderCooling(result) {
+    const envelope = result.envelope || {
+      windows: [],
+      walls: [],
+      windowAreaTotal: parseFloat(result.inputs.win_area) || 0,
+      wallNetArea: Math.max(0, 2 * (parseFloat(result.inputs.len) + parseFloat(result.inputs.wid)) * parseFloat(result.inputs.ht) * ((parseFloat(result.inputs.wall_exp) || 2) / 4) - parseFloat(result.inputs.win_area || 0)),
+      ceilingArea: result.area || 0,
+      floorArea: result.area || 0,
+      roofLoadArea: result.area || 0,
+      wallCltdBase: CLTD_WALL[parseInt(result.inputs.wall_exp, 10)] || 0
+    };
+    const windowBreakdownRows = envelope.windows.map(function (windowEntry) {
+      return '<tr class="sub-row"><td>↳ Window ' + windowEntry.index + '</td><td>Individual glazing panel</td><td>' + formatNumber(windowEntry.area, 2) + " m2</td><td>" + orientationLabel(windowEntry.orientation) + '</td><td class="num">Included</td><td class="num">-</td></tr>';
+    }).join("");
+    const wallBreakdownRows = envelope.walls.map(function (wallEntry) {
+      return '<tr class="sub-row"><td>↳ Wall ' + wallEntry.index + '</td><td>Net external wall after glazing</td><td>' + formatNumber(wallEntry.netArea, 2) + " m2</td><td>" + orientationLabel(wallEntry.orientation) + ' · factor ' + formatNumber(wallEntry.orientationFactor || 1, 2) + '</td><td class="num">Included</td><td class="num">-</td></tr>';
+    }).join("");
     setMetric("m-sh", formatInt(result.totalS), "W");
     setMetric("m-lh", formatInt(result.totalL), "W");
     setMetric("m-total", formatInt(result.totalLoad), "W");
@@ -2688,9 +3193,11 @@
       + '<tr><td>People - latent</td><td>' + result.inputs.occ + " x " + result.peopleLatent / Math.max(parseFloat(result.inputs.occ) || 1, 1) + ' W/person</td><td>' + result.inputs.occ + ' persons</td><td>Metabolic latent</td><td class="num">-</td><td class="num">' + formatInt(result.peopleLatent) + "</td></tr>"
       + '<tr><td>Lighting</td><td>A x W/m2 x CLF 0.9</td><td>' + formatNumber(result.area, 1) + " m2</td><td>" + result.inputs.lighting + ' W/m2</td><td class="num">' + formatInt(result.lightingSensible) + '</td><td class="num">-</td></tr>'
       + '<tr><td>Equipment</td><td>A x W/m2 x diversity 0.8</td><td>' + formatNumber(result.area, 1) + " m2</td><td>" + result.inputs.equip + ' W/m2</td><td class="num">' + formatInt(result.equipmentSensible) + '</td><td class="num">-</td></tr>'
-      + '<tr><td>Window solar</td><td>A x dynamic SHGF x SC x CLF</td><td>' + result.inputs.win_area + " m2</td><td>SHGF=" + Math.round(result.solar.point.shgf) + ", SC=" + result.inputs.sc_glass + ", CLF=" + result.inputs.clf_shade + '</td><td class="num">' + formatInt(result.windowSensible) + '</td><td class="num">-</td></tr>'
-      + '<tr><td>Wall conduction</td><td>U x A x CLTD</td><td>' + formatNumber(Math.max(0, 2 * (parseFloat(result.inputs.len) + parseFloat(result.inputs.wid)) * parseFloat(result.inputs.ht) * ((parseFloat(result.inputs.wall_exp) || 2) / 4) - parseFloat(result.inputs.win_area || 0)), 1) + " m2</td><td>U=" + result.inputs.u_wall + ", CLTD=" + (CLTD_WALL[parseInt(result.inputs.wall_exp, 10)] || 0) + '</td><td class="num">' + formatInt(result.wallSensible) + '</td><td class="num">-</td></tr>'
-      + '<tr><td>Roof / floor</td><td>U x A x CLTD</td><td>' + formatNumber(result.area, 1) + " m2</td><td>U=" + result.inputs.u_roof + ", CLTD=" + (CLTD_ROOF_MAP[result.inputs.roof_exp] || 0) + '</td><td class="num">' + formatInt(result.roofSensible) + '</td><td class="num">-</td></tr>'
+      + '<tr><td>Window solar</td><td>Σ(A_window x dynamic SHGF x SC x CLF)</td><td>' + formatNumber(envelope.windowAreaTotal, 2) + " m2</td><td>" + escapeHtml(result.solar.activeOrientationLabel || orientationLabel(result.inputs.win_orient)) + " · SHGF(avg)=" + Math.round(result.solar.point.shgf) + ", SC=" + result.inputs.sc_glass + ", CLF=" + result.inputs.clf_shade + '</td><td class="num">' + formatInt(result.windowSensible) + '</td><td class="num">-</td></tr>'
+      + windowBreakdownRows
+      + '<tr><td>Wall conduction</td><td>Σ(U x A_net x CLTD x orientation factor)</td><td>' + formatNumber(envelope.wallNetArea, 2) + " m2</td><td>U=" + result.inputs.u_wall + ", CLTD(base)=" + (CLTD_WALL[Math.min(Math.max((envelope.walls || []).length, 1), 4)] || 0) + '</td><td class="num">' + formatInt(result.wallSensible) + '</td><td class="num">-</td></tr>'
+      + wallBreakdownRows
+      + '<tr><td>Roof / floor</td><td>U x area x CLTD</td><td>' + formatNumber(envelope.roofLoadArea, 2) + " m2</td><td>Ceiling=" + formatNumber(envelope.ceilingArea, 2) + " m2, Floor=" + formatNumber(envelope.floorArea, 2) + " m2, CLTD=" + (CLTD_ROOF_MAP[result.inputs.roof_exp] || 0) + '</td><td class="num">' + formatInt(result.roofSensible) + '</td><td class="num">-</td></tr>'
       + '<tr><td>Fresh air - sensible</td><td>m_dot OA x c_p x dT</td><td>' + formatInt(result.fresh_total_cfm) + " CFM</td><td>dT=" + formatNumber((parseFloat(result.inputs.out_dbt) || 0) - (parseFloat(result.inputs.in_dbt) || 0), 1) + ' C</td><td class="num">' + formatInt(result.freshAirSensible) + '</td><td class="num">-</td></tr>'
       + '<tr><td>Fresh air - latent</td><td>Vent total - vent sensible</td><td>-</td><td>dW=' + formatNumber((result.psychro.W_out - result.psychro.W_in) * 1000, 2) + ' g/kg</td><td class="num">-</td><td class="num">' + formatInt(result.freshAirLatent) + "</td></tr>"
       + '<tr class="total-row"><td><b>Total</b></td><td colspan="3">Room sensible + latent</td><td class="num"><b>' + formatInt(result.totalS) + '</b></td><td class="num"><b>' + formatInt(result.totalL) + "</b></td></tr>"
@@ -3162,7 +3669,8 @@
       latitude: result.solar.latitude,
       dayOfYear: result.solar.dayOfYear,
       hours: result.solar.curve.map(function (row) { return row.hour; }),
-      activeOrientation: result.inputs.win_orient,
+      activeOrientation: result.solar.activeOrientation || result.inputs.win_orient,
+      activeOrientationLabel: result.solar.activeOrientationLabel || orientationLabel(result.inputs.win_orient),
       activeCurve: result.solar.curve,
       designPoint: result.solar.point,
       series: result.solar.orientationSeries
@@ -3574,7 +4082,7 @@
       summary.innerHTML = '<p class="schematic-empty">Run calculations to generate the active-room 3D schematic.</p>';
       schedule.innerHTML = '<p class="schematic-empty">AHU deployment and per-zone routing notes will appear here after calculation.</p>';
       if (note) {
-        note.textContent = "Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset the camera. Air animation is illustrative only.";
+        note.textContent = "Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset the camera. Use Outside View for an uncluttered duct overview and Inside View to turn the ceiling on and look into the room.";
       }
       if (disclaimer) {
         disclaimer.textContent = "Visualization only. Use this for coordination and presentation, not for IFC, shop, fabrication, or standards approval.";
@@ -3630,12 +4138,14 @@
       disclaimer.textContent = "Visualization only. Room envelope, deployed AHU count, zone count, and displayed duct sections follow the active result; routing geometry, camera view, and animated air streams are illustrative and not a standards-based or fabrication-issued layout.";
     }
     if (note) {
-      note.textContent = "Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset the camera. Blue particles show conditioned supply air; warm red particles show return air. Routing is representative, while equipment count and duct sections follow the live result.";
+      note.textContent = "Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset the camera. Outside View hides the ceiling for clearer duct layouts; Inside View turns the ceiling on and places the camera within the room. Blue particles show conditioned supply air; warm red particles show return air.";
     }
 
     summary.innerHTML =
       '<table class="calc-table"><tbody>'
       + '<tr><td>Room envelope</td><td class="num">' + formatNumber(len, 2) + " x " + formatNumber(wid, 2) + " x " + formatNumber(ht, 2) + "</td><td>m</td><td>Exact active-room dimensions from the calculation input</td></tr>"
+      + '<tr><td>Window schedule</td><td class="num">' + (((result.envelope && result.envelope.windows && result.envelope.windows.length) || 0)) + "</td><td>nos.</td><td>" + escapeHtml(result.envelope ? summarizeOrientationAreas(result.envelope.windowAreaByOrientation, "m²") : "No windows") + "</td></tr>"
+      + '<tr><td>Ceiling / floor</td><td class="num">' + formatNumber((result.envelope && result.envelope.ceilingArea) || (len * wid), 2) + " / " + formatNumber((result.envelope && result.envelope.floorArea) || (len * wid), 2) + "</td><td>m²</td><td>Envelope surfaces shown in the visual room shell</td></tr>"
       + '<tr><td>AHU deployment mode</td><td class="num">' + escapeHtml(zoneAhuStrategy.modeLabel || "Single AHU") + "</td><td>-</td><td>" + escapeHtml((zoneAhuStrategy.aggregateSelection && zoneAhuStrategy.aggregateSelection.ahu && zoneAhuStrategy.aggregateSelection.ahu.deploymentSummary) || "Active room deployment") + "</td></tr>"
       + '<tr><td>Deployed AHU modules</td><td class="num">' + deployedAhuCount + "</td><td>nos.</td><td>Exact module count from the selected AHU deployment</td></tr>"
       + '<tr><td>Cooling capacity shown</td><td class="num">' + formatNumber((zoneAhuStrategy.aggregateSelection && zoneAhuStrategy.aggregateSelection.ahu && zoneAhuStrategy.aggregateSelection.ahu.capacityTR) || result.tr_catalog || result.tr_final || 0, 2) + "</td><td>TR</td><td>Selected coil capacity represented in the visual deployment</td></tr>"
@@ -3795,9 +4305,13 @@
         + "<dt>Length</dt><dd>" + result.inputs.len + " m</dd>"
         + "<dt>Width</dt><dd>" + result.inputs.wid + " m</dd>"
         + "<dt>Height</dt><dd>" + result.inputs.ht + " m</dd>"
-        + "<dt>Window area</dt><dd>" + result.inputs.win_area + " m²</dd>"
-        + "<dt>Window orientation</dt><dd>" + result.inputs.win_orient + "</dd>"
-        + "<dt>Wall exposure</dt><dd>" + result.inputs.wall_exp + " exposed wall(s)</dd>"
+        + "<dt>Window count</dt><dd>" + ((result.envelope && result.envelope.windows && result.envelope.windows.length) || 0) + "</dd>"
+        + "<dt>Total window area</dt><dd>" + formatNumber((result.envelope && result.envelope.windowAreaTotal) || parseFloat(result.inputs.win_area) || 0, 2) + " m²</dd>"
+        + "<dt>Window schedule</dt><dd>" + escapeHtml(result.envelope ? summarizeOrientationAreas(result.envelope.windowAreaByOrientation, "m²") : result.inputs.win_orient) + "</dd>"
+        + "<dt>External walls</dt><dd>" + ((result.envelope && result.envelope.walls && result.envelope.walls.length) || parseInt(result.inputs.wall_exp, 10) || 0) + "</dd>"
+        + "<dt>Wall schedule</dt><dd>" + escapeHtml(result.envelope ? summarizeOrientationAreas(result.envelope.wallGrossAreaByOrientation, "m²") : (result.inputs.wall_exp + " exposed wall(s)")) + "</dd>"
+        + "<dt>Ceiling area</dt><dd>" + formatNumber((result.envelope && result.envelope.ceilingArea) || result.area || 0, 2) + " m²</dd>"
+        + "<dt>Floor area</dt><dd>" + formatNumber((result.envelope && result.envelope.floorArea) || result.area || 0, 2) + " m²</dd>"
         + "<dt>Roof exposure</dt><dd>" + String(result.inputs.roof_exp).replace(/_/g, " ") + "</dd>"
         + "<dt>Wall U-value</dt><dd>" + result.inputs.u_wall + " W/m²K</dd>"
         + "<dt>Roof U-value</dt><dd>" + result.inputs.u_roof + " W/m²K</dd>"
@@ -4421,6 +4935,9 @@
     await hydrateProjectForUser(user);
     if (!platform.inputListenersBound) {
       attachInputListeners();
+    }
+    if (!platform.envelopeListenersBound) {
+      attachEnvelopeListeners();
     }
     renderProjectSummary();
     runAll();
@@ -5137,6 +5654,9 @@
     }
     platform.inputListenersBound = true;
     ROOM_FIELD_IDS.concat(RATE_FIELD_IDS).concat(["project_name", "project_name_panel", "diversity_factor"]).forEach(function (fieldId) {
+      if (fieldId === "window_count" || fieldId === "wall_count") {
+        return;
+      }
       const element = byId(fieldId);
       if (!element) {
         return;
@@ -5155,6 +5675,91 @@
           saveCurrentInputsToActiveRoom();
         }
         ProjectManager.autoSave();
+      });
+    });
+  }
+
+  function attachEnvelopeListeners() {
+    if (platform.envelopeListenersBound) {
+      return;
+    }
+    platform.envelopeListenersBound = true;
+
+    const windowCount = byId("window_count");
+    if (windowCount) {
+      windowCount.addEventListener("change", function () {
+        commitEnvelopeCount("window_count");
+        saveCurrentInputsToActiveRoom();
+        ProjectManager.autoSave();
+      });
+      windowCount.addEventListener("blur", function () {
+        commitEnvelopeCount("window_count");
+        saveCurrentInputsToActiveRoom();
+        ProjectManager.autoSave();
+      });
+    }
+
+    const wallCount = byId("wall_count");
+    if (wallCount) {
+      wallCount.addEventListener("change", function () {
+        commitEnvelopeCount("wall_count");
+        saveCurrentInputsToActiveRoom();
+        ProjectManager.autoSave();
+      });
+      wallCount.addEventListener("blur", function () {
+        commitEnvelopeCount("wall_count");
+        saveCurrentInputsToActiveRoom();
+        ProjectManager.autoSave();
+      });
+    }
+
+    const windowList = byId("window-config-list");
+    if (windowList) {
+      windowList.addEventListener("input", function () {
+        syncEnvelopeConfigsFromUi();
+        saveCurrentInputsToActiveRoom();
+        ProjectManager.autoSave();
+      });
+      windowList.addEventListener("change", function () {
+        syncEnvelopeConfigsFromUi();
+        saveCurrentInputsToActiveRoom();
+        ProjectManager.autoSave();
+      });
+    }
+
+    const wallList = byId("wall-config-list");
+    if (wallList) {
+      wallList.addEventListener("input", function () {
+        syncEnvelopeConfigsFromUi();
+        saveCurrentInputsToActiveRoom();
+        ProjectManager.autoSave();
+      });
+      wallList.addEventListener("change", function () {
+        syncEnvelopeConfigsFromUi();
+        saveCurrentInputsToActiveRoom();
+        ProjectManager.autoSave();
+      });
+    }
+
+    ["len", "wid"].forEach(function (fieldId) {
+      const element = byId(fieldId);
+      if (!element) {
+        return;
+      }
+      element.addEventListener("input", function () {
+        syncPlanAreaFields(false);
+      });
+    });
+
+    ["ceiling_area", "floor_area"].forEach(function (fieldId) {
+      const element = byId(fieldId);
+      if (!element) {
+        return;
+      }
+      element.addEventListener("input", function () {
+        const plannedArea = roundTo((numberOf("len", parseFloat(DEFAULT_INPUTS.len)) || 0) * (numberOf("wid", parseFloat(DEFAULT_INPUTS.wid)) || 0), 2);
+        const current = parseFloat(element.value);
+        element.dataset.manual = Number.isFinite(current) && Math.abs(current - plannedArea) > 0.05 ? "true" : "false";
       });
     });
   }

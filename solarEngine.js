@@ -188,6 +188,7 @@
     const hours = options.hours;
     const series = options.series;
     const activeOrientation = options.activeOrientation;
+    const activeOrientationLabel = options.activeOrientationLabel || activeOrientation;
     const activeCurve = options.activeCurve;
     const designPoint = options.designPoint;
     const maxValue = Math.max(100, Math.max.apply(null, activeCurve.map(function (row) {
@@ -244,7 +245,7 @@
       + '<circle cx="' + designX.toFixed(1) + '" cy="' + designY.toFixed(1) + '" r="5" fill="' + activeColor + '" stroke="var(--bg3)" stroke-width="2"/>'
       + '<text x="' + designX.toFixed(1) + '" y="' + (designY - 10).toFixed(1) + '" text-anchor="middle" fill="' + activeColor + '" font-size="10" font-weight="bold">' + Math.round(designPoint.shgf) + "</text>"
       + '<text x="' + padding.left + '" y="' + (padding.top - 4) + '" fill="#5f6783" font-size="9">SHGF (W/m2)</text>'
-      + '<text x="' + (width / 2) + '" y="' + (height - 4) + '" text-anchor="middle" fill="#5f6783" font-size="9">Solar hour 8:00-17:00 | Day ' + options.dayOfYear + " | Lat " + options.latitude.toFixed(1) + " deg | " + activeOrientation + " facade</text>";
+      + '<text x="' + (width / 2) + '" y="' + (height - 4) + '" text-anchor="middle" fill="#5f6783" font-size="9">Solar hour 8:00-17:00 | Day ' + options.dayOfYear + " | Lat " + options.latitude.toFixed(1) + " deg | " + activeOrientationLabel + "</text>";
   }
 
   window.SolarEngine = {
