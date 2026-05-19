@@ -35,8 +35,8 @@
       const actualCount = rows * cols;
       const xPositions = buildAxisPositions(length, cols, wallOffset);
       const yPositions = buildAxisPositions(width, rows, wallOffset);
-      const spacingX = cols > 1 ? xPositions[1] - xPositions[0] : 0;
-      const spacingY = rows > 1 ? yPositions[1] - yPositions[0] : 0;
+      const spacingX = cols > 1 ? xPositions[1] - xPositions[0] : Math.max(length - wallOffset * 2, 0);
+      const spacingY = rows > 1 ? yPositions[1] - yPositions[0] : Math.max(width - wallOffset * 2, 0);
       const roomRatio = safeDiv(length, width, 1);
       const gridRatio = safeDiv(cols, rows, 1);
       const aspectPenalty = Math.abs(gridRatio - roomRatio);
@@ -64,10 +64,27 @@
       actualCount: 1,
       xPositions: [length / 2],
       yPositions: [width / 2],
-      spacingX: 0,
-      spacingY: 0,
+      spacingX: Math.max(length - wallOffset * 2, 0),
+      spacingY: Math.max(width - wallOffset * 2, 0),
       score: 0
     };
+  }
+
+  function countSupplyReturnOverlaps(supplies, returns, toleranceM) {
+    const supplyList = Array.isArray(supplies) ? supplies : [];
+    const returnList = Array.isArray(returns) ? returns : [];
+    const tolerance = Math.max(toleranceM || 0.35, 0.05);
+    let overlaps = 0;
+    supplyList.forEach(function (supply) {
+      returnList.forEach(function (returnPoint) {
+        const dx = (supply.x || 0) - (returnPoint.x || 0);
+        const dy = (supply.y || 0) - (returnPoint.y || 0);
+        if (Math.sqrt(dx * dx + dy * dy) <= tolerance) {
+          overlaps += 1;
+        }
+      });
+    });
+    return overlaps;
   }
 
   function estimateThrow(cfmPerDevice, ceilingHeight, throwProfile) {
@@ -96,21 +113,26 @@
     return supplies;
   }
 
-  function buildReturns(length, width, wallOffset, totalAirflowCFM, industrialMode) {
+  function buildReturns(length, width, wallOffset, totalAirflowCFM, industrialMode, returnMode) {
     const totalArea = Math.max(totalAirflowCFM * CFM_TO_M3S / 2.5, 0.12);
-    const count = industrialMode || totalAirflowCFM > 4000 ? Math.max(2, Math.ceil(totalAirflowCFM / 5000)) : 1;
+    const lowWallMode = returnMode === "low_wall";
+    const count = lowWallMode
+      ? Math.max(2, Math.ceil(totalAirflowCFM / 4500))
+      : industrialMode || totalAirflowCFM > 4000 ? Math.max(2, Math.ceil(totalAirflowCFM / 5000)) : 1;
     const areaPerReturn = totalArea / count;
     const grilleWidth = roundTo(Math.sqrt(areaPerReturn * 1.6), 2);
     const grilleHeight = roundTo(areaPerReturn / Math.max(grilleWidth, 0.1), 2);
     const alongLength = length >= width;
-    const side = alongLength ? "east wall" : "north wall";
+    const side = lowWallMode
+      ? alongLength ? "east/west low wall" : "north/south low wall"
+      : alongLength ? "east wall" : "north wall";
     const coords = [];
 
     if (alongLength) {
       const yPositions = buildAxisPositions(width, count, wallOffset);
       yPositions.forEach(function (y) {
         coords.push({
-          x: roundTo(length - wallOffset, 2),
+          x: roundTo(length, 2),
           y: roundTo(y, 2)
         });
       });
@@ -119,21 +141,23 @@
       xPositions.forEach(function (x) {
         coords.push({
           x: roundTo(x, 2),
-          y: roundTo(width - wallOffset, 2)
+          y: roundTo(width, 2)
         });
       });
     }
 
     return {
       count: count,
-      type: industrialMode ? "High-wall return grille" : "Ceiling return grille",
+      type: lowWallMode ? "Low-wall return grille" : industrialMode ? "High-wall return grille" : "Ceiling return grille",
       side: side,
       width: grilleWidth,
       height: grilleHeight,
       totalArea: roundTo(totalArea, 3),
       maxFaceVelocity: 2.5,
       coords: coords,
-      locationNote: "Placed opposite the supply field to reduce short-circuiting."
+      locationNote: lowWallMode
+        ? "Placed low on the perimeter to support cleanroom sweep and reduce short-circuiting."
+        : "Placed opposite the supply field to reduce short-circuiting."
     };
   }
 
@@ -168,6 +192,9 @@
       + cfmPenalty * 30
       + Math.abs(cfmPerDevice - config.targetCFM) / Math.max(config.targetCFM, 1) * 8
       + (grid.actualCount - requiredCount) * 1.5;
+    const returns = buildReturns(config.length, config.width, config.wallOffset, config.totalAirflowCFM, config.industrialMode, config.returnMode);
+    const supplies = buildSupplies(grid);
+    const overlapCount = countSupplyReturnOverlaps(supplies, returns.coords, Math.max(config.wallOffset * 0.6, 0.35));
 
     return {
       diffuserCount: grid.actualCount,
@@ -190,14 +217,27 @@
       oversized: cfmPerDevice > config.maxCFMPerDiffuser + 0.1,
       spacingPass: spacingPass,
       throwPass: throwPass,
-      supplies: buildSupplies(grid),
-      returns: buildReturns(config.length, config.width, config.wallOffset, config.totalAirflowCFM, config.industrialMode),
+      supplies: supplies,
+      returns: returns,
+      overlapCount: overlapCount,
+      coordinateValidation: {
+        status: overlapCount > 0 ? "REVIEW" : "OK",
+        overlapCount: overlapCount,
+        zeroSpacing: grid.actualCount > 1 && (grid.spacingX <= 0 || grid.spacingY <= 0)
+      },
       score: score
     };
   }
 
   function selectionBasisText(layout) {
     const status = [];
+
+    if (layout.isCleanroomMode) {
+      status.push(layout.cfmRangePass ? "module airflow stays inside the preferred cleanroom band" : "module airflow sits outside the preferred cleanroom band");
+      status.push(layout.spacingPass ? "coverage spacing passes" : "coverage spacing needs more modules or smaller zones");
+      status.push(layout.throwPass ? "vertical sweep check passes" : "vertical sweep / delivery review is required");
+      return layout.distributionMode + " selected for filtered recirculation coverage; " + status.join(", ") + ".";
+    }
 
     if (layout.cfmRangePass) {
       status.push("airflow per outlet stays inside the preferred band");
@@ -230,6 +270,7 @@
     const airflowPerAreaThreshold = Math.max(settings.industrialAirflowPerAreaThreshold || 22, 8);
     const highBayMode = ceilingHeight >= 10;
     const longThrowMode = ceilingHeight >= 7.5;
+    const cleanroomMode = !!settings.cleanroomMode;
     const industrialMode = !!(settings.forceIndustrialTerminals || airflowPerArea > airflowPerAreaThreshold || longThrowMode);
     const wallOffset = industrialMode
       ? clamp(Math.min(length, width) * 0.08, 0.75, 1.0)
@@ -254,6 +295,27 @@
           verticalReachFactor: 0.85,
           throwProfile: "high_bay"
         }
+      : cleanroomMode
+        ? {
+            length: length,
+            width: width,
+            ceilingHeight: ceilingHeight,
+            totalAirflowCFM: totalAirflowCFM,
+            industrialMode: false,
+            cleanroomMode: true,
+            supplyDeviceType: settings.cleanroomSupplyDeviceType || "HEPA ceiling module",
+            distributionMode: settings.cleanroomDistributionMode || "Cleanroom recirculation",
+            targetCFM: clamp(settings.targetCFM || 450, 180, 900),
+            minCFMPerDiffuser: clamp(settings.minCFMPerDiffuser || 220, 140, 700),
+            maxCFMPerDiffuser: clamp(settings.maxCFMPerDiffuser || 650, 240, 900),
+            maxSpacingFactor: clamp(settings.cleanroomMaxSpacingFactor || 1.2, 0.9, 1.6),
+            maxSpacing: ceilingHeight * clamp(settings.cleanroomMaxSpacingFactor || 1.2, 0.9, 1.6),
+            wallOffset: clamp(Math.min(length, width) * 0.08, 0.55, 0.95),
+            throwFactor: 0.55,
+            verticalReachFactor: clamp(settings.cleanroomVerticalReachFactor || 0.12, 0.03, 0.2),
+            throwProfile: "comfort",
+            returnMode: "low_wall"
+          }
       : (longThrowMode || industrialMode)
         ? {
             length: length,
@@ -327,10 +389,11 @@
       minCountWithoutOversizing: minCountByAirflow,
       maxCountWithoutUndersizing: maxCountWithoutUndersizing,
       airflowBandFeasible: airflowBandFeasible,
-      isIndustrialMode: industrialMode,
+      isIndustrialMode: industrialMode && !cleanroomMode,
+      isCleanroomMode: cleanroomMode,
       supplyDeviceType: config.supplyDeviceType,
       distributionMode: config.distributionMode,
-      symbolPrefix: industrialMode ? "J" : "S"
+      symbolPrefix: cleanroomMode ? "H" : industrialMode ? "J" : "S"
     });
 
     layout.undersizingProtected = airflowBandFeasible && layout.diffuserCount <= countUpperBound + 0.01;
@@ -441,6 +504,16 @@
       spacingX: roundTo(Math.max.apply(null, zoneLayouts.map(function (zoneLayout) { return zoneLayout.spacingX || 0; }).concat([0])), 2),
       spacingY: roundTo(Math.max.apply(null, zoneLayouts.map(function (zoneLayout) { return zoneLayout.spacingY || 0; }).concat([0])), 2),
       spacingPass: zoneLayouts.every(function (zoneLayout) { return zoneLayout.spacingPass; }),
+      overlapCount: zoneLayouts.reduce(function (sum, zoneLayout) { return sum + (zoneLayout.overlapCount || 0); }, 0),
+      coordinateValidation: {
+        status: zoneLayouts.some(function (zoneLayout) {
+          return zoneLayout.coordinateValidation && zoneLayout.coordinateValidation.status !== "OK";
+        }) ? "REVIEW" : "OK",
+        overlapCount: zoneLayouts.reduce(function (sum, zoneLayout) { return sum + (zoneLayout.overlapCount || 0); }, 0),
+        zeroSpacing: zoneLayouts.some(function (zoneLayout) {
+          return zoneLayout.coordinateValidation && zoneLayout.coordinateValidation.zeroSpacing;
+        })
+      },
       throwPass: zoneLayouts.every(function (zoneLayout) { return zoneLayout.throwPass; }),
       cfmRangePass: zoneLayouts.every(function (zoneLayout) { return zoneLayout.cfmRangePass; }),
       undersized: zoneLayouts.some(function (zoneLayout) { return zoneLayout.undersized; }),
@@ -573,8 +646,14 @@
       + "</g>";
   }
 
-  window.DiffuserLayout = {
+  const api = {
     computeLayout: computeLayout,
     renderLayoutSvg: renderLayoutSvg
   };
+  if (typeof window !== "undefined") {
+    window.DiffuserLayout = api;
+  }
+  if (typeof module === "object" && module.exports) {
+    module.exports = api;
+  }
 }());

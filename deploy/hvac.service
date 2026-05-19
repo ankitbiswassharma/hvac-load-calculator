@@ -1,0 +1,42 @@
+# systemd unit for the HVAC platform (when not using Docker)
+#
+# Install:
+#   sudo cp deploy/hvac.service /etc/systemd/system/hvac.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hvac
+#
+[Unit]
+Description=Musk-IT HVAC platform
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hvac
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+User=hvac
+Group=hvac
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+EnvironmentFile=-/etc/hvac/.env
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/hvac/server-data
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -5,12 +5,13 @@
   "description": "Musk-IT HVAC design platform with server-backed auth and per-user project storage",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test",
     "db:migrate:json": "node scripts/migrate-json-to-postgres.js",
     "climate:seed:legacy": "node scripts/import-climate-data.js --legacy-inline --replace=true",
     "climate:import": "node scripts/import-climate-data.js"
   },
   "dependencies": {
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^8.0.7",
     "pg": "^8.12.0"
   }
 }

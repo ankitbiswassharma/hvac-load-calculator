@@ -40,6 +40,36 @@
     return baseKey + "::" + storageScope;
   }
 
+  function hasAuthenticatedUser() {
+    return !!(window.AuthManager
+      && typeof window.AuthManager.isAuthenticated === "function"
+      && window.AuthManager.isAuthenticated());
+  }
+
+  function readScopedProjects() {
+    return readJson(scopedKey(PROJECTS_KEY), {});
+  }
+
+  function persistProjectLocally(project) {
+    const nextProject = clone(project || manager.project);
+    if (!nextProject) {
+      return null;
+    }
+    const projects = readScopedProjects();
+    projects[slugify(nextProject.name || "HVAC Project")] = clone(nextProject);
+    writeJson(scopedKey(PROJECTS_KEY), projects);
+    writeJson(scopedKey(AUTOSAVE_KEY), nextProject);
+    manager.savedProjectsIndex = manager.listSavedProjects(true);
+    return clone(nextProject);
+  }
+
+  function readLocalProject(projectName) {
+    if (projectName) {
+      return readScopedProjects()[slugify(projectName)] || null;
+    }
+    return readJson(scopedKey(AUTOSAVE_KEY), null);
+  }
+
   function createProject(defaultInputs) {
     const firstRoom = {
       id: "room-1",
@@ -230,31 +260,21 @@
 
       if (window.ServerApi) {
         return window.ServerApi.isAvailable().then(function (available) {
-          if (available) {
+          if (available && hasAuthenticatedUser()) {
             return window.ServerApi.saveProject(name, self.project).then(function (response) {
               if (response && response.ok) {
                 self.savedProjectsIndex = response.projects || self.savedProjectsIndex;
                 return clone(self.project);
               }
-              return null;
+              return persistProjectLocally(self.project);
             });
           }
 
-          const projects = readJson(scopedKey(PROJECTS_KEY), {});
-          projects[slugify(name)] = clone(self.project);
-          writeJson(scopedKey(PROJECTS_KEY), projects);
-          writeJson(scopedKey(AUTOSAVE_KEY), self.project);
-          self.savedProjectsIndex = self.listSavedProjects(true);
-          return clone(self.project);
+          return persistProjectLocally(self.project);
         });
       }
 
-      const projects = readJson(scopedKey(PROJECTS_KEY), {});
-      projects[slugify(name)] = clone(this.project);
-      writeJson(scopedKey(PROJECTS_KEY), projects);
-      writeJson(scopedKey(AUTOSAVE_KEY), this.project);
-      this.savedProjectsIndex = this.listSavedProjects(true);
-      return Promise.resolve(clone(this.project));
+      return Promise.resolve(persistProjectLocally(this.project));
     },
 
     loadProject: function (projectName) {
@@ -277,7 +297,7 @@
 
       if (window.ServerApi) {
         return window.ServerApi.isAvailable().then(function (available) {
-          if (available) {
+          if (available && hasAuthenticatedUser()) {
             return window.ServerApi.loadProject(projectName || "").then(function (response) {
               if (response && response.ok) {
                 if (response.projects) {
@@ -285,29 +305,15 @@
                 }
                 return applyLoaded(response.project || null);
               }
-              return null;
+              return applyLoaded(readLocalProject(projectName));
             });
           }
 
-          let loaded = null;
-          if (projectName) {
-            const projects = readJson(scopedKey(PROJECTS_KEY), {});
-            loaded = projects[slugify(projectName)] || null;
-          } else {
-            loaded = readJson(scopedKey(AUTOSAVE_KEY), null);
-          }
-          return applyLoaded(loaded);
+          return applyLoaded(readLocalProject(projectName));
         });
       }
 
-      let loaded = null;
-      if (projectName) {
-        const projects = readJson(scopedKey(PROJECTS_KEY), {});
-        loaded = projects[slugify(projectName)] || null;
-      } else {
-        loaded = readJson(scopedKey(AUTOSAVE_KEY), null);
-      }
-      return Promise.resolve(applyLoaded(loaded));
+      return Promise.resolve(applyLoaded(readLocalProject(projectName)));
     },
 
     autoSave: function () {
@@ -321,14 +327,16 @@
           if (window.ServerApi) {
             window.ServerApi.isAvailable().then(function (available) {
               if (available) {
-                const authReady = !(window.AuthManager && typeof window.AuthManager.isAuthenticated === "function")
-                  || window.AuthManager.isAuthenticated();
+                const authReady = hasAuthenticatedUser();
                 if (!authReady) {
                   writeJson(scopedKey(AUTOSAVE_KEY), manager.project);
                   resolve();
                   return;
                 }
-                return window.ServerApi.saveAutosave(manager.project).then(function () {
+                return window.ServerApi.saveAutosave(manager.project).then(function (response) {
+                  if (!(response && response.ok)) {
+                    writeJson(scopedKey(AUTOSAVE_KEY), manager.project);
+                  }
                   resolve();
                 }).catch(function () {
                   writeJson(scopedKey(AUTOSAVE_KEY), manager.project);
@@ -354,9 +362,11 @@
       const self = this;
       if (window.ServerApi) {
         return window.ServerApi.isAvailable().then(function (available) {
-          if (available) {
+          if (available && hasAuthenticatedUser()) {
             return window.ServerApi.listProjects().then(function (response) {
-              self.savedProjectsIndex = response && response.ok ? (response.projects || []) : [];
+              self.savedProjectsIndex = response && response.ok
+                ? (response.projects || [])
+                : self.listSavedProjects(true);
               return self.savedProjectsIndex.slice();
             });
           }

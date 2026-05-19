@@ -2,6 +2,7 @@
   const ACCOUNTS_KEY = "hvac-platform-users-v1";
   const SESSION_KEY = "hvac-platform-session-v1";
   const SESSION_PROFILE_KEY = "hvac-platform-session-profile-v1";
+  const BACKEND_SESSION_TOKEN_KEY = "hvac-platform-backend-session-token-v1";
 
   function nowIso() {
     return new Date().toISOString();
@@ -46,6 +47,18 @@
 
   function clearSessionProfile() {
     removeKey(SESSION_PROFILE_KEY);
+  }
+
+  function readBackendSessionToken() {
+    return String(readJson(BACKEND_SESSION_TOKEN_KEY, "") || "").trim();
+  }
+
+  function writeBackendSessionToken(token) {
+    writeJson(BACKEND_SESSION_TOKEN_KEY, String(token || "").trim());
+  }
+
+  function clearBackendSessionToken() {
+    removeKey(BACKEND_SESSION_TOKEN_KEY);
   }
 
   function fallbackHash(value) {
@@ -122,6 +135,22 @@
   function clearSession() {
     removeKey(SESSION_KEY);
     clearSessionProfile();
+    clearBackendSessionToken();
+  }
+
+  async function confirmBackendSession() {
+    if (!(window.ServerApi && await window.ServerApi.isAvailable())) {
+      return null;
+    }
+
+    const response = await window.ServerApi.getSession();
+    if (response && response.ok && response.user) {
+      writeSessionProfile(response.user);
+      return response.user;
+    }
+
+    clearSession();
+    return null;
   }
 
   const manager = {
@@ -142,8 +171,13 @@
           password: password,
           recoveryKey: recoveryKey
         });
-        if (response && response.ok && response.user) {
-          writeSessionProfile(response.user);
+        if (response && response.ok) {
+          if (response.sessionToken) {
+            writeBackendSessionToken(response.sessionToken);
+          }
+          if (response.user) {
+            writeSessionProfile(response.user);
+          }
         }
         return response;
       }
@@ -206,8 +240,13 @@
           identifier: identifier,
           password: password
         });
-        if (response && response.ok && response.user) {
-          writeSessionProfile(response.user);
+        if (response && response.ok) {
+          if (response.sessionToken) {
+            writeBackendSessionToken(response.sessionToken);
+          }
+          if (response.user) {
+            writeSessionProfile(response.user);
+          }
         }
         return response;
       }
@@ -233,6 +272,41 @@
         ok: true,
         user: sanitizeUser(account)
       };
+    },
+
+    async requestOwnerOtp(payload) {
+      const email = normalizeEmail(payload && payload.email);
+      const password = String((payload && payload.password) || "");
+
+      if (!(window.ServerApi && await window.ServerApi.isAvailable())) {
+        return { ok: false, error: "Owner login requires the backend server so the email OTP can be issued." };
+      }
+
+      return window.ServerApi.requestOwnerOtp({
+        email: email,
+        password: password
+      });
+    },
+
+    async verifyOwnerOtp(payload) {
+      const response = window.ServerApi && await window.ServerApi.isAvailable()
+        ? await window.ServerApi.verifyOwnerOtp({
+          challengeId: String((payload && payload.challengeId) || "").trim(),
+          email: normalizeEmail(payload && payload.email),
+          otp: String((payload && payload.otp) || "").trim()
+        })
+        : { ok: false, error: "Owner login requires the backend server so the email OTP can be verified." };
+
+      if (response && response.ok) {
+        if (response.sessionToken) {
+          writeBackendSessionToken(response.sessionToken);
+        }
+        if (response.user) {
+          writeSessionProfile(response.user);
+        }
+      }
+
+      return response;
     },
 
     async resetPassword(payload) {
@@ -301,15 +375,18 @@
 
     async hydrateSession() {
       if (window.ServerApi && await window.ServerApi.isAvailable()) {
-        const response = await window.ServerApi.getSession();
-        if (response && response.ok && response.user) {
-          writeSessionProfile(response.user);
-          return response.user;
-        }
-        clearSession();
-        return null;
+        return confirmBackendSession();
       }
       return this.getCurrentUser();
+    },
+
+    handleUnauthorized(detail) {
+      clearSession();
+      return {
+        ok: false,
+        status: 401,
+        error: detail && detail.error ? detail.error : "Your session expired. Please log in again."
+      };
     },
 
     getCurrentUser() {
@@ -336,6 +413,10 @@
 
     isAuthenticated() {
       return !!this.getCurrentUser();
+    },
+
+    getBackendSessionToken() {
+      return readBackendSessionToken();
     }
   };
 

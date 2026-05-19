@@ -58,9 +58,13 @@
     return Number.isFinite(value) ? value : fallback;
   }
 
+  // Returns the brake (shaft) kW for the fan only — NOT motor electrical
+  // input. Caller must divide by motor efficiency for input kW.
+  // The previous 0.45 efficiency floor was masking poor fan selections; we
+  // keep a 0.25 hard floor only to avoid division-by-zero for bad inputs.
   function estimatedMotorKw(airflowCFM, espPa, efficiency) {
     const espInWg = Math.max(espPa || 0, 0) / 249.0889;
-    const brakeHp = Math.max(airflowCFM || 0, 0) * espInWg / (6356 * Math.max(efficiency, 0.45));
+    const brakeHp = Math.max(airflowCFM || 0, 0) * espInWg / (6356 * Math.max(efficiency, 0.25));
     return brakeHp * 0.746;
   }
 
@@ -140,6 +144,9 @@
   }
 
   function airflowConstraintLabel(airflowConstraint) {
+    if (airflowConstraint === "cleanroom") {
+      return "Cleanroom recirculation governs airflow";
+    }
     if (airflowConstraint === "ventilation") {
       return "Ventilation governs airflow";
     }
@@ -168,7 +175,10 @@
     const best = bestEntry.candidate;
     const point = bestEntry.point;
     const brakeKW = estimatedMotorKw(airflowCFM, espPa, best.efficiency);
-    const motorKw = nextMotorKW(brakeKW * 1.15);
+    // Standard motor sizing: shaft / η_motor × service factor (1.15).
+    // The legacy form omitted /η_motor, undersizing by ~9%.
+    const motorElectricalInputKW = brakeKW / MOTOR_EFFICIENCY;
+    const motorKw = nextMotorKW(motorElectricalInputKW * 1.15);
 
     return {
       curveId: best.id,
@@ -547,7 +557,9 @@
     const airflowDriver = ahu.airflowConstraint || "thermal";
     let optimizationNote = "Fan power is in a normal range for the selected airflow and static pressure.";
 
-    if (airflowDriver === "ach" && airflowPenaltyRatio > 1.2) {
+    if (airflowDriver === "cleanroom" && airflowPenaltyRatio > 1.15) {
+      optimizationNote = "Airflow is cleanroom-recirculation driven. Keep coil sizing on thermal duty and use separate make-up / recirculation roles so high room airflow does not overstate cooling capacity.";
+    } else if (airflowDriver === "ach" && airflowPenaltyRatio > 1.2) {
       optimizationNote = "Airflow is ACH-driven. Consider separating process ventilation or using a dedicated make-up / exhaust path so the cooling coil is not oversized on air quantity.";
     } else if (airflowDriver === "ventilation" && airflowPenaltyRatio > 1.15) {
       optimizationNote = "Ventilation is driving airflow. A DOAS or separate outdoor-air unit can reduce main AHU fan energy.";
@@ -577,6 +589,9 @@
 
   function buildAhuGroups(rooms, diversityFactor) {
     const groups = {};
+    const effectiveDiversityFactor = (Array.isArray(rooms) ? rooms : []).filter(function (room) {
+      return room && room.result;
+    }).length <= 1 ? 1 : (diversityFactor || 1);
 
     rooms.forEach(function (room) {
       if (!room.result) {
@@ -590,25 +605,43 @@
           totalDesignTR: 0,
           totalFinalTR: 0,
           totalCatalogTR: 0,
+          totalCoolingCFM: 0,
+          totalRecirculationCFM: 0,
+          totalVentilationCFM: 0,
+          totalRoomCFM: 0,
           totalCFM: 0,
           peakESP: 0,
           preferredMargin: 0.1
         };
       }
 
+      const finalDesign = room.result.finalDesign || null;
+      const finalAirflow = finalDesign && finalDesign.airflow ? finalDesign.airflow : null;
+      const finalLoads = finalDesign && finalDesign.loads ? finalDesign.loads : null;
+      const finalEquipment = finalDesign && finalDesign.equipment ? finalDesign.equipment : null;
+      const finalEsp = finalDesign && finalDesign.esp ? finalDesign.esp : null;
       groups[key].roomCount += 1;
-      groups[key].totalDesignTR += room.result.tr_design || room.result.tr_calc || 0;
-      groups[key].totalFinalTR += room.result.tr_final || room.result.tr_sf || room.result.tr_design || room.result.TR_sel || 0;
-      groups[key].totalCatalogTR += room.result.tr_catalog || room.result.TR_sel || 0;
-      groups[key].totalCFM += room.result.cfm_conditioned || room.result.Q_sup_cfm || room.result.cfm_final || 0;
-      groups[key].peakESP = Math.max(groups[key].peakESP, room.result.total_esp || 0);
+      groups[key].totalDesignTR += finalLoads ? finalLoads.trDesign || 0 : room.result.tr_design || room.result.tr_calc || 0;
+      groups[key].totalFinalTR += finalLoads ? finalLoads.trFinal || 0 : room.result.tr_final || room.result.tr_sf || room.result.tr_design || room.result.TR_sel || 0;
+      groups[key].totalCatalogTR += finalEquipment ? finalEquipment.selectedAhuTR || 0 : room.result.tr_catalog || room.result.TR_sel || 0;
+      groups[key].totalCoolingCFM += finalAirflow ? finalAirflow.coolingCFM || 0 : room.result.cfm_cooling_coil || room.result.Q_coil_cfm || room.result.cfm_conditioned || room.result.Q_sup_cfm || 0;
+      groups[key].totalRecirculationCFM += finalAirflow ? finalAirflow.recirculationCFM || 0 : room.result.cfm_conditioned || room.result.Q_sup_cfm || room.result.cfm_final || 0;
+      groups[key].totalVentilationCFM += finalAirflow ? finalAirflow.ventilationCFM || 0 : room.result.ventilation_airflow_cfm || room.result.cfm_dedicated_ventilation || room.result.cfm_process_excess || 0;
+      groups[key].totalRoomCFM += finalAirflow ? finalAirflow.totalRoomSupplyCFM || 0 : room.result.cfm_final || room.result.total_room_airflow_cfm || room.result.Q_sup_cfm || 0;
+      groups[key].totalCFM += finalAirflow ? finalAirflow.recirculationCFM || 0 : room.result.cfm_conditioned || room.result.Q_sup_cfm || room.result.cfm_final || 0;
+      groups[key].peakESP = Math.max(groups[key].peakESP, finalEsp ? finalEsp.totalPa || 0 : room.result.total_esp || 0);
       groups[key].preferredMargin = Math.max(groups[key].preferredMargin, (room.result.airflowBasis && room.result.airflowBasis.preferredSelectionMargin) || 0.1);
     });
 
     return Object.keys(groups).sort().map(function (key) {
       const group = groups[key];
-      const diversifiedFinalTR = group.totalFinalTR * diversityFactor;
-      const diversifiedCFM = group.totalCFM * diversityFactor;
+      const diversifiedFinalTR = group.totalFinalTR * effectiveDiversityFactor;
+      // ASHRAE Ch 18 diversity applies to *simultaneous peak cooling load*
+      // only — NOT to airflow. Ventilation (ASHRAE 62.1) and ACH minimums
+      // are set per-room and must not be discounted by load diversity.
+      // The legacy code multiplied CFM by diversityFactor which produced
+      // undersized supply ducts and a 62.1-non-compliant ventilation total.
+      const diversifiedCFM = group.totalCFM;
       const diversifiedCatalogTR = nextCatalogTR(diversifiedFinalTR);
       const selection = selectSystem(diversifiedFinalTR, diversifiedCFM, group.peakESP, {
         catalogTR: diversifiedCatalogTR,
@@ -625,17 +658,22 @@
         totalDesignTR: group.totalDesignTR,
         totalFinalTR: group.totalFinalTR,
         totalCatalogTR: group.totalCatalogTR,
+        totalCoolingCFM: group.totalCoolingCFM,
+        totalRecirculationCFM: group.totalRecirculationCFM,
+        totalVentilationCFM: group.totalVentilationCFM,
+        totalRoomCFM: group.totalRoomCFM,
         diversifiedTR: diversifiedFinalTR,
         diversifiedCatalogTR: diversifiedCatalogTR,
         totalCFM: group.totalCFM,
         diversifiedCFM: diversifiedCFM,
+        diversityFactor: effectiveDiversityFactor,
         peakESP: group.peakESP,
         selection: selection
       };
     });
   }
 
-  window.EquipmentEngine = {
+  const api = {
     FAN_DATABASE: FAN_DATABASE,
     AHU_DATABASE: AHU_DATABASE,
     nextCatalogTR: nextCatalogTR,
@@ -644,4 +682,10 @@
     selectSystem: selectSystem,
     buildAhuGroups: buildAhuGroups
   };
+  if (typeof window !== "undefined") {
+    window.EquipmentEngine = api;
+  }
+  if (typeof module === "object" && module.exports) {
+    module.exports = api;
+  }
 }());

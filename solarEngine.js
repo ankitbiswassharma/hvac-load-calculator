@@ -10,15 +10,13 @@
     NW: 315
   };
 
+  // Orientation is already captured by the incidence-angle math (cos θ from
+  // solar position and surface azimuth). Multiplying again by these fixed
+  // factors double-counted orientation: north walls were reduced twice, west
+  // walls were inflated by 16%. All entries are now 1.0 so that the legacy
+  // factor is a no-op. The variable is kept so external callers do not break.
   const ORIENTATION_MULTIPLIER = {
-    N: 0.55,
-    NE: 0.82,
-    E: 1.14,
-    SE: 1.08,
-    S: 0.95,
-    SW: 1.08,
-    W: 1.16,
-    NW: 0.84
+    N: 1, NE: 1, E: 1, SE: 1, S: 1, SW: 1, W: 1, NW: 1
   };
 
   const ORIENTATION_COLORS = {
@@ -92,25 +90,67 @@
     return radToDeg(Math.acos(clamp(cosTheta, 0, 1)));
   }
 
-  function clearSkyDirectNormalIrradiance(altitude) {
-    if (altitude <= 0) {
-      return 0;
+  // ASHRAE HOF Ch 14 monthly clear-sky (A, B, C) coefficients.
+  // A — apparent solar constant (W/m²)
+  // B — atmospheric extinction (-)
+  // C — diffuse sky factor (-)
+  const ASHRAE_CLEAR_SKY = [
+    { A: 1230, B: 0.142, C: 0.058 }, // Jan
+    { A: 1215, B: 0.144, C: 0.060 }, // Feb
+    { A: 1186, B: 0.156, C: 0.071 }, // Mar
+    { A: 1136, B: 0.180, C: 0.097 }, // Apr
+    { A: 1104, B: 0.196, C: 0.121 }, // May
+    { A: 1088, B: 0.205, C: 0.134 }, // Jun
+    { A: 1085, B: 0.207, C: 0.136 }, // Jul
+    { A: 1107, B: 0.201, C: 0.122 }, // Aug
+    { A: 1152, B: 0.177, C: 0.092 }, // Sep
+    { A: 1193, B: 0.160, C: 0.073 }, // Oct
+    { A: 1221, B: 0.149, C: 0.063 }, // Nov
+    { A: 1234, B: 0.142, C: 0.057 }  // Dec
+  ];
+
+  function monthIndexFromDayOfYear(dayOfYear) {
+    const cum = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
+    for (let m = 0; m < 12; m++) {
+      if (dayOfYear <= cum[m + 1]) return m;
     }
-    const sinAltitude = Math.sin(degToRad(altitude));
-    const beamA = 1160;
-    const beamB = 0.21;
-    return beamA * Math.exp(-beamB / Math.max(sinAltitude, 0.05));
+    return 11;
   }
 
-  function diffuseIrradiance(dni) {
-    return 0.12 * dni;
+  function ashraeMonthlyCoeffs(dayOfYear) {
+    return ASHRAE_CLEAR_SKY[monthIndexFromDayOfYear(dayOfYear || 172)];
   }
 
-  function groundReflectedComponent(dni, altitude) {
-    return 0.18 * dni * Math.sin(degToRad(Math.max(altitude, 0))) * 0.5;
+  function clearSkyDirectNormalIrradiance(altitude, dayOfYear) {
+    if (altitude <= 0) return 0;
+    const sinAlt = Math.sin(degToRad(altitude));
+    const { A, B } = ashraeMonthlyCoeffs(dayOfYear);
+    return A * Math.exp(-B / Math.max(sinAlt, 1e-3));
   }
 
-  function hourlySHGF(latitude, dayOfYear, solarHour, orientation) {
+  // Diffuse on a horizontal surface = C × DNI. For a tilted surface multiply
+  // by the sky-view factor (1 + cos Σ)/2 — caller is responsible. The
+  // legacy code returned 0.12*DNI for all tilts; we keep the signature but
+  // now compute the monthly value.
+  function diffuseIrradiance(dni, dayOfYear) {
+    const { C } = ashraeMonthlyCoeffs(dayOfYear);
+    return C * dni;
+  }
+
+  // Ground-reflected on a vertical surface (view factor 0.5).
+  // E_r = (DNI·sinβ + E_d_horiz) · ρ_g · (1 − cos Σ)/2
+  // For Σ=90° (vertical wall), (1 − cos Σ)/2 = 0.5; ρ_g = 0.2 default.
+  function groundReflectedComponent(dni, altitude, dayOfYear, groundReflectance) {
+    const sinAlt = Math.sin(degToRad(Math.max(altitude, 0)));
+    const ghi = dni * sinAlt + diffuseIrradiance(dni, dayOfYear);
+    const rho = groundReflectance != null ? groundReflectance : 0.20;
+    return ghi * rho * 0.5;
+  }
+
+  function hourlySHGF(latitude, dayOfYear, solarHour, orientation, options) {
+    const settings = options || {};
+    const glassSHGC = Math.max(settings.glassSHGC != null ? settings.glassSHGC : settings.shadingCoefficient != null ? settings.shadingCoefficient : 0.87, 0);
+    const coolingLoadFactor = Math.max(settings.coolingLoadFactor != null ? settings.coolingLoadFactor : 1, 0);
     const declination = solarDeclination(dayOfYear);
     const hourAngle = hourAngleFromSolarHour(solarHour);
     const altitude = solarAltitude(latitude, declination, hourAngle);
@@ -126,19 +166,33 @@
         diffuse: 0,
         ground: 0,
         multiplier: ORIENTATION_MULTIPLIER[orientation] || 1,
-        shgf: 0
+        shgf: 0,
+        solarIrradianceWm2: 0,
+        incidentSolarOnGlassWm2: 0,
+        glassSHGC: glassSHGC,
+        shadingCoefficient: glassSHGC,
+        solarHeatGainWm2: 0,
+        coolingLoadSolarWm2: 0,
+        clfAdjustedSolarLoadWm2: 0,
+        valueBasis: "effective_glass_cooling_load_w_m2"
       };
     }
 
     const azimuth = solarAzimuth(latitude, declination, hourAngle, altitude);
     const surfaceAzimuth = ORIENTATION_AZIMUTH[orientation] || 180;
     const incidence = incidenceAngle(altitude, azimuth, surfaceAzimuth);
-    const dni = clearSkyDirectNormalIrradiance(altitude);
+    const dni = clearSkyDirectNormalIrradiance(altitude, dayOfYear);
     const direct = incidence < 90 ? dni * Math.cos(degToRad(incidence)) : 0;
-    const diffuse = diffuseIrradiance(dni);
-    const ground = groundReflectedComponent(dni, altitude);
+    const diffuse = diffuseIrradiance(dni, dayOfYear);
+    const ground = groundReflectedComponent(dni, altitude, dayOfYear);
     const multiplier = ORIENTATION_MULTIPLIER[orientation] || 1;
-    const shgf = Math.max(0, (direct + diffuse + ground) * multiplier);
+    const skySolarIrradiance = Math.max(0, direct + diffuse + ground);
+    const incidentSolarIrradiance = Math.max(0, skySolarIrradiance * multiplier);
+    const incidenceModifier = clamp(1 - Math.pow(Math.max(incidence, 0) / 95, 2) * 0.22, 0.55, 1);
+    const incidentSolarOnGlassWm2 = incidentSolarIrradiance * incidenceModifier;
+    const solarHeatGainWm2 = incidentSolarOnGlassWm2 * glassSHGC;
+    const coolingLoadSolarWm2 = solarHeatGainWm2 * coolingLoadFactor;
+    const shgf = coolingLoadSolarWm2;
 
     return {
       hour: solarHour,
@@ -151,26 +205,36 @@
       diffuse: diffuse,
       ground: ground,
       multiplier: multiplier,
-      shgf: shgf
+      incidenceAngleModifier: incidenceModifier,
+      solarIrradianceWm2: skySolarIrradiance,
+      incidentSolarIrradianceWm2: incidentSolarIrradiance,
+      incidentSolarOnGlassWm2: incidentSolarOnGlassWm2,
+      glassSHGC: glassSHGC,
+      shadingCoefficient: glassSHGC,
+      solarHeatGainWm2: solarHeatGainWm2,
+      coolingLoadSolarWm2: coolingLoadSolarWm2,
+      clfAdjustedSolarLoadWm2: coolingLoadSolarWm2,
+      shgf: shgf,
+      valueBasis: "effective_glass_cooling_load_w_m2"
     };
   }
 
-  function hourlyCurve(latitude, dayOfYear, orientation, startHour, endHour) {
+  function hourlyCurve(latitude, dayOfYear, orientation, startHour, endHour, options) {
     const fromHour = startHour == null ? 8 : startHour;
     const toHour = endHour == null ? 17 : endHour;
     const rows = [];
     for (let hour = fromHour; hour <= toHour; hour += 1) {
-      rows.push(hourlySHGF(latitude, dayOfYear, hour, orientation));
+      rows.push(hourlySHGF(latitude, dayOfYear, hour, orientation, options));
     }
     return rows;
   }
 
-  function buildOrientationSeries(latitude, dayOfYear, startHour, endHour) {
+  function buildOrientationSeries(latitude, dayOfYear, startHour, endHour, options) {
     return Object.keys(ORIENTATION_AZIMUTH).map(function (orientation) {
       return {
         orientation: orientation,
         color: ORIENTATION_COLORS[orientation],
-        points: hourlyCurve(latitude, dayOfYear, orientation, startHour, endHour)
+        points: hourlyCurve(latitude, dayOfYear, orientation, startHour, endHour, options)
       };
     });
   }
@@ -244,11 +308,11 @@
       + polylines
       + '<circle cx="' + designX.toFixed(1) + '" cy="' + designY.toFixed(1) + '" r="5" fill="' + activeColor + '" stroke="var(--bg3)" stroke-width="2"/>'
       + '<text x="' + designX.toFixed(1) + '" y="' + (designY - 10).toFixed(1) + '" text-anchor="middle" fill="' + activeColor + '" font-size="10" font-weight="bold">' + Math.round(designPoint.shgf) + "</text>"
-      + '<text x="' + padding.left + '" y="' + (padding.top - 4) + '" fill="#5f6783" font-size="9">SHGF (W/m2)</text>'
+      + '<text x="' + padding.left + '" y="' + (padding.top - 4) + '" fill="#5f6783" font-size="9">EFFECTIVE SOLAR LOAD (W/m2)</text>'
       + '<text x="' + (width / 2) + '" y="' + (height - 4) + '" text-anchor="middle" fill="#5f6783" font-size="9">Solar hour 8:00-17:00 | Day ' + options.dayOfYear + " | Lat " + options.latitude.toFixed(1) + " deg | " + activeOrientationLabel + "</text>";
   }
 
-  window.SolarEngine = {
+  const api = {
     ORIENTATION_AZIMUTH: ORIENTATION_AZIMUTH,
     ORIENTATION_MULTIPLIER: ORIENTATION_MULTIPLIER,
     ORIENTATION_COLORS: ORIENTATION_COLORS,
@@ -262,4 +326,10 @@
     buildOrientationSeries: buildOrientationSeries,
     renderChart: renderChart
   };
+  if (typeof window !== "undefined") {
+    window.SolarEngine = api;
+  }
+  if (typeof module === "object" && module.exports) {
+    module.exports = api;
+  }
 }());

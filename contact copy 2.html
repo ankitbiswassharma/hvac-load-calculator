@@ -200,6 +200,8 @@
   }
   .logout-btn { padding: 8px 12px; }
   .owner-only, .company-admin-only { display: none !important; }
+  body.is-owner .nav-group:not(.owner-only),
+  body.is-owner .nav-item:not(.owner-only) { display: none !important; }
   body.is-owner .nav-group.owner-only { display: block !important; }
   body.is-owner .nav-item.owner-only { display: flex !important; }
   body.is-owner .panel.owner-only.active { display: block !important; }
@@ -439,12 +441,44 @@
   .section-note { font-size: 11px; color: var(--text3); font-family: var(--mono); margin-bottom: 16px; padding: 10px 14px; background: var(--bg3); border-left: 3px solid var(--accent); border-radius: 0 var(--r) var(--r) 0; }
 
   /* ── REPORT ── */
-  .report-block { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--r2); padding: 20px 24px; margin-bottom: 14px; }
-  .report-block h4 { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: 0.1em; margin-bottom: 12px; text-transform: uppercase; }
+  .report-block { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 0; margin-bottom: 16px; overflow: hidden; }
+  .report-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 18px 22px 13px; border-bottom: 1px solid rgba(148,163,184,0.16); background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0)); }
+  .report-section-label { font-family: var(--mono); font-size: 9px; color: var(--text3); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 4px; }
+  .report-section-body { padding: 20px 22px 22px; }
+  .report-block h4 { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: 0.08em; margin: 0; text-transform: uppercase; }
   .report-kv { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; }
   .report-kv dt { font-size: 11px; color: var(--text3); font-family: var(--mono); }
   .report-kv dd { font-size: 12px; color: var(--text); font-family: var(--mono); font-weight: 500; text-align: right; }
   .report-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .report-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+  .report-summary-card { border: 1px solid rgba(148,163,184,0.18); border-radius: 10px; padding: 11px 12px; background: rgba(255,255,255,0.03); min-width: 0; }
+  .report-summary-label { font-family: var(--mono); font-size: 9px; color: var(--text3); letter-spacing: 0.1em; text-transform: uppercase; }
+  .report-summary-value { margin-top: 6px; font-family: var(--mono); font-size: 18px; color: var(--text); font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
+  .report-summary-meta { margin-top: 4px; font-family: var(--mono); font-size: 10px; color: var(--text3); line-height: 1.4; }
+  .report-index { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+  .report-index-item { border: 1px solid rgba(148,163,184,0.18); border-radius: 8px; padding: 9px 10px; background: rgba(255,255,255,0.025); font-family: var(--mono); font-size: 10px; color: var(--text2); line-height: 1.35; }
+  .report-index-num { display: block; color: var(--accent); font-weight: 700; margin-bottom: 3px; }
+  .report-status-pill { display: inline-flex; align-items: center; min-height: 22px; padding: 4px 9px; border-radius: 999px; border: 1px solid rgba(148,163,184,0.24); background: rgba(255,255,255,0.04); color: var(--text2); font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .report-ai-metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+  .report-ai-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+  .report-ai-card { border: 1px solid rgba(148,163,184,0.18); border-radius: 10px; padding: 11px 12px; background: rgba(255,255,255,0.025); min-width: 0; }
+  .report-ai-card-title { font-family: var(--mono); font-size: 10px; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .report-ai-card-body { font-family: var(--mono); font-size: 11px; color: var(--text2); line-height: 1.55; overflow-wrap: break-word; }
+  .report-cover .report-section-head { display: none; }
+  .report-cover .report-section-body { padding: 0; }
+  .report-cover-shell { position: relative; overflow: hidden; border-radius: 8px; background: linear-gradient(135deg, #07111f 0%, #10233a 52%, #f8fafc 52.2%, #ffffff 100%); min-height: 560px; }
+  .report-cover-shell::before { content: ''; position: absolute; left: 0; top: 0; width: 52%; height: 5px; background: linear-gradient(90deg, #8fd0ff, #20b486, #d2a44b); pointer-events: none; }
+  .report-cover-top { position: relative; display: grid; grid-template-columns: 1.05fr 0.95fr; min-height: 280px; }
+  .report-cover-title-zone { padding: 34px 36px 28px; color: #f8fafc; }
+  .report-cover-eyebrow { font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #8fd0ff; }
+  .report-cover-title { margin-top: 18px; font-family: var(--sans); font-size: 42px; line-height: 0.98; letter-spacing: 0; font-weight: 800; color: #ffffff; max-width: 520px; }
+  .report-cover-subtitle { margin-top: 16px; font-family: var(--mono); font-size: 12px; line-height: 1.7; color: #c7d4e5; max-width: 560px; }
+  .report-cover-brand { display: flex; align-items: center; justify-content: flex-end; padding: 34px 36px 28px; text-align: right; }
+  .report-cover-brand-card { min-width: 260px; border: 1px solid rgba(15,23,42,0.10); border-radius: 8px; padding: 18px 20px; background: rgba(255,255,255,0.92); box-shadow: 0 18px 46px rgba(15,23,42,0.13); }
+  .report-cover-meta { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 1px solid rgba(15,23,42,0.10); background: rgba(255,255,255,0.94); }
+  .report-cover-meta .report-kv { padding: 22px 28px; border-right: 1px solid rgba(15,23,42,0.08); }
+  .report-cover-meta .report-kv:last-child { border-right: 0; }
+  .report-exec-band { position: relative; padding: 22px 28px 28px; background: #ffffff; border-top: 1px solid rgba(15,23,42,0.08); }
   .report-visual { background: var(--bg); border: 1px solid var(--border); border-radius: var(--r); padding: 10px; margin-top: 12px; }
   .schematic-shell { display: grid; gap: 16px; }
   .schematic-topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -678,27 +712,52 @@
   .report-disclaimer { margin-top: 18px; padding: 13px 16px; background: rgba(10,16,24,0.72); border: 1px solid rgba(109,199,255,0.14); border-radius: var(--r); font-family: var(--mono); font-size: 10px; color: #9aabc7; }
   .report-footer { margin-top: 12px; padding: 16px 18px 8px; border-top: 1px solid rgba(109,199,255,0.22); text-align: center; font-family: var(--mono); font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase; color: #88a0c7; }
   #p-report {
-    background: #f4f7fb;
+    background: #e9eef5;
+    padding: 22px;
   }
   #p-report .report-block {
     background: #ffffff;
-    border-color: #d8e2ee;
-    box-shadow: 0 10px 28px rgba(15,23,42,0.06);
+    border-color: #d9e2ee;
+    box-shadow: 0 16px 44px rgba(15,23,42,0.08);
+  }
+  #p-report .report-section-head {
+    background: linear-gradient(90deg, #f8fbff, #ffffff);
+    border-bottom-color: #e4ebf4;
+    box-shadow: inset 4px 0 0 #1666a9;
   }
   #p-report .report-block:first-of-type {
-    background: #ffffff;
-    border-left: 4px solid #4fa4ff;
-    border-color: #d8e2ee;
-    box-shadow: 0 12px 30px rgba(15,23,42,0.08);
+    border: 0;
+    box-shadow: 0 26px 68px rgba(15,23,42,0.16);
   }
   #p-report .report-block h4 {
+    color: #102033;
+    font-size: 13px;
+  }
+  #p-report .report-section-label,
+  #p-report .report-summary-label,
+  #p-report .report-summary-meta,
+  #p-report .report-index-item,
+  #p-report .report-ai-card-body {
+    color: #65748b;
+  }
+  #p-report .report-summary-card,
+  #p-report .report-index-item,
+  #p-report .report-ai-card,
+  #p-report .report-status-pill {
+    background: #ffffff;
+    border-color: #d8e2ee;
+    box-shadow: 0 8px 22px rgba(15,23,42,0.045);
+  }
+  #p-report .report-summary-value,
+  #p-report .report-ai-card-title,
+  #p-report .report-index-num {
     color: #1666a9;
   }
   #p-report .report-block:nth-of-type(3n) h4 {
-    color: #0e8a73;
+    color: #102033;
   }
   #p-report .report-block:nth-of-type(4n) h4 {
-    color: #b26a00;
+    color: #102033;
   }
   #p-report .report-kv dt,
   #p-report .report-subtitle {
@@ -711,15 +770,19 @@
     color: #5c6981;
   }
   #p-report .report-visual {
-    background: #ffffff;
+    background: #fbfdff;
     border-color: #d8e2ee;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.85);
   }
   #p-report .calc-table th {
-    color: #73829d;
-    border-bottom-color: #e4ebf4;
+    color: #53647b;
+    background: #f5f8fc;
+    border-bottom-color: #dfe8f3;
+    font-size: 10px;
   }
   #p-report .calc-table td {
     color: #1b2b40;
+    border-bottom-color: #edf2f8;
   }
   #p-report .calc-table .num {
     color: #1666a9;
@@ -752,6 +815,22 @@
   #p-report .report-disclaimer {
     background: #ffffff;
     color: #65748b;
+    border-color: #d8e2ee;
+  }
+  #p-report .report-cover .report-brand-word {
+    font-size: 34px;
+  }
+  #p-report .report-cover .report-brand-tag {
+    letter-spacing: 0.12em;
+  }
+  #p-report .report-cover .report-chip {
+    background: #0f2238;
+    border-color: #28435f;
+    color: #eaf4ff;
+  }
+  #p-report .report-cover .report-chip-soft {
+    background: #f7fafc;
+    color: #53647b;
     border-color: #d8e2ee;
   }
 
@@ -810,6 +889,13 @@
     .schematic-meta-grid { grid-template-columns: 1fr; }
     .schematic-canvas-wrap, .schematic-canvas { min-height: 460px; height: 460px; }
     .schematic-stage-controls { position: static; margin: 0 0 4px auto; }
+    .report-cover-top,
+    .report-cover-meta,
+    .report-summary-grid,
+    .report-index,
+    .report-ai-metric-grid,
+    .report-ai-card-grid { grid-template-columns: 1fr 1fr; }
+    .report-cover-title { font-size: 34px; }
     .report-brand-badges { align-items: flex-start; }
     .auth-card { grid-template-columns: 1fr; }
     .auth-side { border-right: none; border-bottom: 1px solid rgba(255,255,255,0.06); }
@@ -820,6 +906,18 @@
     .envelope-row { grid-template-columns: 1fr; }
     .envelope-index { min-height: 36px; }
     .results-grid { grid-template-columns: 1fr 1fr; }
+    #p-report { padding: 12px; }
+    .report-cover-top,
+    .report-cover-meta,
+    .report-grid-2,
+    .report-summary-grid,
+    .report-index,
+    .report-ai-metric-grid,
+    .report-ai-card-grid { grid-template-columns: 1fr; }
+    .report-cover-title-zone,
+    .report-cover-brand,
+    .report-exec-band,
+    .report-section-body { padding: 18px; }
     .report-brand-word { font-size: 28px; }
     .auth-shell { padding: 18px 12px; }
     .auth-side, .auth-panel { padding: 24px 18px; }
@@ -859,6 +957,49 @@
       break-inside: avoid;
       page-break-inside: avoid;
     }
+    #p-report .report-section-head {
+      background: #f8fbff !important;
+      border-bottom-color: #dfe8f3 !important;
+      box-shadow: inset 4px 0 0 #1666a9 !important;
+    }
+    #p-report .report-cover-shell {
+      background: #fff !important;
+      min-height: auto !important;
+      border: 1px solid #c7d2e4 !important;
+    }
+    #p-report .report-cover-shell::before {
+      display: none !important;
+    }
+    #p-report .report-cover-top,
+    #p-report .report-cover-meta {
+      display: block !important;
+      min-height: 0 !important;
+      background: #fff !important;
+    }
+    #p-report .report-cover-title-zone,
+    #p-report .report-cover-brand,
+    #p-report .report-exec-band {
+      padding: 18px 20px !important;
+      color: #0f172a !important;
+      background: #fff !important;
+    }
+    #p-report .report-cover-title,
+    #p-report .report-cover-eyebrow,
+    #p-report .report-cover-subtitle {
+      color: #0f172a !important;
+    }
+    #p-report .report-cover-brand {
+      justify-content: flex-start !important;
+      text-align: left !important;
+    }
+    #p-report .report-cover-brand-card {
+      box-shadow: none !important;
+      border-color: #c7d2e4 !important;
+    }
+    #p-report .report-cover-meta .report-kv {
+      border-right: 0 !important;
+      padding: 10px 20px !important;
+    }
     #p-report .metric-value,
     #p-report .metric-label,
     #p-report .calc-table th,
@@ -874,7 +1015,12 @@
     #p-report .card-title,
     #p-report .card-num,
     #p-report .report-inline-note,
-    #p-report .report-subtitle {
+    #p-report .report-subtitle,
+    #p-report .report-section-label,
+    #p-report .report-summary-label,
+    #p-report .report-summary-meta,
+    #p-report .report-index-item,
+    #p-report .report-ai-card-body {
       color: #000 !important;
     }
     #p-report .report-block h4 {
@@ -887,13 +1033,21 @@
     }
     #p-report .report-subtitle,
     #p-report .metric-label,
+    #p-report .report-section-label,
+    #p-report .report-summary-label,
+    #p-report .report-summary-meta,
+    #p-report .report-index-item,
+    #p-report .report-ai-card-body,
     #p-report .report-kv dt,
     #p-report .report-inline-note,
     #p-report .calc-table th {
       color: #5c6883 !important;
     }
     #p-report .calc-table .num,
-    #p-report .metric-value {
+    #p-report .metric-value,
+    #p-report .report-summary-value,
+    #p-report .report-ai-card-title,
+    #p-report .report-index-num {
       color: #1666a9 !important;
     }
     #p-report .calc-table .total-row .num {
@@ -933,10 +1087,87 @@
       background: #f8fbff !important;
       color: #334155 !important;
     }
-    #p-report svg { max-width: 100%; height: auto; }
-    #p-report .report-grid-2 { grid-template-columns: 1fr; }
-    #p-report .report-page-break { break-before: page; page-break-before: always; }
-  }
+	    #p-report svg { max-width: 100%; height: auto; }
+	    #p-report .report-grid-2 { grid-template-columns: 1fr; }
+	    #p-report .report-summary-grid,
+	    #p-report .report-index,
+	    #p-report .report-ai-metric-grid,
+	    #p-report .report-ai-card-grid {
+	      grid-template-columns: 1fr 1fr !important;
+	    }
+	    #p-report .advisory-card-stack,
+	    #p-report .advisory-reference-list {
+	      display: block !important;
+	      min-width: 0 !important;
+	      width: 100% !important;
+	    }
+	    #p-report .advisory-card,
+	    #p-report .advisory-card *,
+	    #p-report .advisory-reference-list,
+	    #p-report .advisory-reference-list * {
+	      min-width: 0 !important;
+	      max-width: 100% !important;
+	      overflow-wrap: break-word !important;
+	      word-break: normal !important;
+	      white-space: normal !important;
+	      writing-mode: horizontal-tb !important;
+	      transform: none !important;
+	      letter-spacing: normal;
+	    }
+	    #p-report .advisory-card {
+	      display: block !important;
+	      break-inside: avoid;
+	      page-break-inside: avoid;
+	      margin-bottom: 8px;
+	    }
+	    #p-report .advisory-card-head {
+	      display: block !important;
+	    }
+	    #p-report .report-page-break { break-before: page; page-break-before: always; }
+	    #p-report .report-cover {
+	      break-after: page;
+	      page-break-after: always;
+	    }
+	    #p-report .report-cover-shell {
+	      background: linear-gradient(135deg, #07111f 0%, #10233a 52%, #f8fafc 52.2%, #ffffff 100%) !important;
+	      min-height: 760px !important;
+	      border: none !important;
+	    }
+	    #p-report .report-cover-shell::before {
+	      display: block !important;
+	    }
+	    #p-report .report-cover-top,
+	    #p-report .report-cover-meta {
+	      display: grid !important;
+	      background: transparent !important;
+	    }
+	    #p-report .report-cover-top {
+	      grid-template-columns: 1.05fr 0.95fr !important;
+	      min-height: 280px !important;
+	    }
+	    #p-report .report-cover-meta {
+	      grid-template-columns: 1fr 1fr !important;
+	      background: rgba(255,255,255,0.94) !important;
+	    }
+	    #p-report .report-cover-title-zone {
+	      background: transparent !important;
+	      color: #f8fafc !important;
+	    }
+	    #p-report .report-cover-title,
+	    #p-report .report-cover-eyebrow,
+	    #p-report .report-cover-subtitle {
+	      color: #ffffff !important;
+	    }
+	    #p-report .report-cover-brand {
+	      justify-content: flex-end !important;
+	      text-align: right !important;
+	      background: transparent !important;
+	    }
+	    #p-report .report-cover-brand-card {
+	      box-shadow: 0 18px 46px rgba(15,23,42,0.13) !important;
+	      border-color: rgba(15,23,42,0.10) !important;
+	    }
+	  }
 </style>
 </head>
 <body class="auth-locked">
@@ -960,6 +1191,7 @@
       </div>
       <div class="auth-tabs">
         <button type="button" class="auth-tab active" data-auth-mode="login">Login</button>
+        <button type="button" class="auth-tab" data-auth-mode="owner">Owner Login</button>
         <button type="button" class="auth-tab" data-auth-mode="quote">Get Quote</button>
         <button type="button" class="auth-tab" data-auth-mode="demo">Demo Request</button>
         <button type="button" class="auth-tab" data-auth-mode="reset">Reset Password</button>
@@ -978,6 +1210,28 @@
         <div class="auth-form-actions">
           <button type="submit" class="btn btn-primary">Login</button>
           <button type="button" class="btn btn-secondary" data-auth-mode-switch="reset">Forgot Password?</button>
+        </div>
+      </form>
+
+      <form id="auth-owner-form" class="auth-form">
+        <div class="field">
+          <label>OWNER EMAIL</label>
+          <input type="email" id="auth-owner-email" placeholder="owner@company.com" autocomplete="username">
+        </div>
+        <div class="field">
+          <label>OWNER PASSWORD</label>
+          <input type="password" id="auth-owner-password" placeholder="Enter owner password" autocomplete="current-password">
+        </div>
+        <div class="auth-form-actions">
+          <button type="button" class="btn btn-secondary" id="auth-owner-send-otp-btn">Email OTP</button>
+        </div>
+        <div class="field">
+          <label>EMAIL OTP</label>
+          <input type="text" id="auth-owner-otp" placeholder="6-digit code" inputmode="numeric" autocomplete="one-time-code">
+        </div>
+        <div class="auth-form-actions">
+          <button type="submit" class="btn btn-primary">Verify Owner Login</button>
+          <button type="button" class="btn btn-secondary" data-auth-mode-switch="login">Company Login</button>
         </div>
       </form>
 
@@ -1142,17 +1396,21 @@
     <div class="nav-item" onclick="show('project')"><div class="nav-dot"></div>13 · Multi-Room</div>
     <div class="nav-item" onclick="show('boq')"><div class="nav-dot"></div>14 · BOQ / Costing</div>
     <div class="nav-item" onclick="show('energy')"><div class="nav-dot"></div>15 · Energy Simulation</div>
-    <div class="nav-item" onclick="show('schematic3d')"><div class="nav-dot"></div>16 · 3D Schematic</div>
+    <div class="nav-item" onclick="show('ai')"><div class="nav-dot"></div>16 · AI Design Studio</div>
+    <div class="nav-item" onclick="show('schematic3d')"><div class="nav-dot"></div>17 · 3D Schematic</div>
     <div class="nav-label">OUTPUT</div>
     <div class="nav-item" onclick="show('report')"><div class="nav-dot"></div>Report</div>
   </div>
   <div class="nav-group owner-only">
     <div class="nav-label">OWNER</div>
-    <div class="nav-item owner-only" id="owner-nav-item" onclick="show('owner')"><div class="nav-dot"></div>17 · Owner Dashboard</div>
+    <div class="nav-item owner-only" id="owner-nav-item" onclick="show('owner')"><div class="nav-dot"></div>18 · Owner Dashboard</div>
+    <div class="nav-item owner-only" onclick="show('owner-users')"><div class="nav-dot"></div>19 · User Management</div>
+    <div class="nav-item owner-only" onclick="show('owner-dau')"><div class="nav-dot"></div>20 · DAU & Trend</div>
+    <div class="nav-item owner-only" onclick="show('owner-pricing')"><div class="nav-dot"></div>21 · Pricing Override</div>
   </div>
   <div class="nav-group company-admin-only">
     <div class="nav-label">COMPANY ADMIN</div>
-    <div class="nav-item company-admin-only" id="admin-nav-item" onclick="show('admin')"><div class="nav-dot"></div>18 · Company Admin</div>
+    <div class="nav-item company-admin-only" id="admin-nav-item" onclick="show('admin')"><div class="nav-dot"></div>19 · Company Admin</div>
   </div>
 </nav>
 
@@ -1236,6 +1494,76 @@
         <div class="field"><label>GLASS SHADING COEFFICIENT</label><input type="number" id="sc_glass" value="0.87" step="0.01"><span class="hint">Clear glazing default</span></div>
         <div class="field"><label>WINDOW CLF</label><input type="number" id="clf_shade" value="0.55" step="0.01"><span class="hint">Internal shade / office profile</span></div>
         <div class="field"><label>U-VALUE ROOF (W/m²K)</label><input type="number" id="u_roof" value="0.40" step="0.01"><span class="hint">Used in roof conduction load</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Design Basis &amp; Cleanroom Target</div>
+        <div class="card-num">MOD-01A++</div>
+      </div>
+      <div class="fg">
+        <div class="field">
+          <label>DESIGN BASIS</label>
+          <select id="design_mode">
+            <option value="comfort" selected>Comfort / general HVAC</option>
+            <option value="ach_driven">ACH-driven room</option>
+            <option value="cleanroom">ISO cleanroom</option>
+            <option value="healthcare">Healthcare / clinical</option>
+            <option value="laboratory">Laboratory</option>
+            <option value="process_industrial">Process / industrial</option>
+          </select>
+          <span class="hint">Selects whether outdoor-air ventilation, ACH, cleanliness, clinical, lab, or process criteria control compliance.</span>
+        </div>
+        <div class="field">
+          <label>ACH REQUIREMENT MODE</label>
+          <select id="ach_requirement_mode">
+            <option value="advisory" selected>Advisory target</option>
+            <option value="mandatory">Mandatory compliance</option>
+            <option value="disabled">Disabled</option>
+          </select>
+          <span class="hint">Comfort mode treats ACH as advisory unless this is set to mandatory.</span>
+        </div>
+        <div class="field">
+          <label>ISO CLASS TARGET</label>
+          <select id="cleanroom_iso_class">
+            <option value="ISO 9">ISO 9</option>
+            <option value="ISO 8" selected>ISO 8</option>
+            <option value="ISO 7">ISO 7</option>
+            <option value="ISO 6">ISO 6</option>
+            <option value="ISO 5">ISO 5</option>
+          </select>
+          <span class="hint">Used only when Design Basis = ISO cleanroom.</span>
+        </div>
+        <div class="field">
+          <label>CLASSIFICATION STATE</label>
+          <select id="cleanroom_state">
+            <option value="operational" selected>Operational</option>
+            <option value="at_rest">At-rest</option>
+          </select>
+          <span class="hint">Operational mode applies the stronger airflow template.</span>
+        </div>
+      </div>
+      <div class="fg" style="margin-top:14px;">
+        <div class="field">
+          <label>PRESSURE REGIME</label>
+          <select id="cleanroom_pressure_mode">
+            <option value="positive" selected>Positive cascade</option>
+            <option value="neutral">Neutral</option>
+            <option value="negative">Negative containment</option>
+          </select>
+          <span class="hint">Affects leakage and make-up air assumptions in cleanroom mode.</span>
+        </div>
+        <div class="field">
+          <label>ISO DESIGN NOTE</label>
+          <input type="text" value="ISO 14644 class is particle-based; the app uses HVAC sizing templates for airflow, filtration, and pressure." readonly>
+          <span class="hint">Certification still requires particle counts, HEPA integrity, and pressure qualification.</span>
+        </div>
+        <div class="field">
+          <label>AI PAGE</label>
+          <input type="text" value="AI Design Studio compares cost, efficiency, and compliance concepts from the live result." readonly>
+          <span class="hint" id="design-mode-note">Comfort / general HVAC mode is active. Switch to ISO cleanroom when you want class-based airflow and cleanroom design concepts.</span>
+        </div>
       </div>
     </div>
 
@@ -1982,6 +2310,73 @@
     </div>
   </div>
 
+  <div class="panel" id="p-ai">
+    <div class="section-note">Dedicated AI design studio for alternate HVAC concepts. It compares cost-effective, balanced, and efficiency-first schemes from the active room result. In ISO cleanroom mode it also carries the selected cleanroom class into the comparison logic.</div>
+
+    <div class="results-grid">
+      <div class="metric c-blue"><div class="metric-label">DESIGN BASIS</div><div class="metric-value" id="m-ai-mode">—</div></div>
+      <div class="metric c-green"><div class="metric-label">CURRENT LIVE SYSTEM</div><div class="metric-value" id="m-ai-current">—</div></div>
+      <div class="metric c-amber"><div class="metric-label">BEST CAPEX OPTION</div><div class="metric-value" id="m-ai-cost">—</div></div>
+      <div class="metric c-purple"><div class="metric-label">BEST EFFICIENCY OPTION</div><div class="metric-value" id="m-ai-eff">—</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">AI Studio Status</div><div class="card-num">AI-01</div></div>
+      <div id="ai-design-status-note" style="font-family:var(--mono);font-size:12px;color:var(--text2);">Run calculations to generate alternative design concepts.</div>
+    </div>
+
+    <div class="report-grid-2">
+      <div class="card">
+        <div class="card-header"><div class="card-title">Design Summary</div><div class="card-num">AI-02</div></div>
+        <div id="ai-design-summary"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Alternative-design summary will appear after calculation.</p></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">Standards Basis</div><div class="card-num">AI-03</div></div>
+        <div id="ai-design-standards"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">The current comfort or ISO cleanroom basis will appear here after calculation.</p></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">Alternative Concepts</div><div class="card-num">AI-04</div></div>
+      <div id="ai-design-cards"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Run calculations to generate alternative concepts.</p></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">Option Comparison</div><div class="card-num">AI-05</div></div>
+      <div id="ai-design-table"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Alternative comparison will appear after calculation.</p></div>
+    </div>
+
+    <!-- ============================================================== -->
+    <!--  ASHRAE engine: full sized designs, variants, auto-fix         -->
+    <!-- ============================================================== -->
+    <div class="card" id="ashrae-designer-card">
+      <div class="card-header">
+        <div class="card-title">ASHRAE Engine — Full Sized Design</div>
+        <div class="card-num">AI-06</div>
+      </div>
+      <p class="hint" style="margin:0 0 10px 0;">
+        Generates a complete, deterministically sized HVAC design from your
+        current room inputs using the ASHRAE Handbook of Fundamentals.
+        The numbers below come from the engine, not the AI &mdash; AI is used
+        only to narrate the result and to propose alternatives that are
+        re-validated by the engine.
+      </p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+        <button type="button" id="btn-ai-full-design" class="btn btn-primary">
+          Generate full design
+        </button>
+        <button type="button" id="btn-ai-design-variants" class="btn">
+          Get 3 ranked variants
+        </button>
+        <button type="button" id="btn-ai-autofix" class="btn">
+          Auto-fix until ASHRAE-90.1 compliant
+        </button>
+        <span id="ai-engine-status" style="font-family:var(--mono);font-size:12px;color:var(--text2);align-self:center;">Idle.</span>
+      </div>
+      <div id="ai-engine-result"></div>
+    </div>
+  </div>
+
   <div class="panel" id="p-schematic3d">
     <div class="section-note">Interactive 3D schematic driven by the active room result. Room size, AHU count, zoning, and duct sizes follow the live calculation output, but routing, air animation, and equipment geometry are visual only and must not be treated as a fabrication drawing, standard-compliant layout, or issued design model.</div>
 
@@ -2053,66 +2448,101 @@
   </div>
 
   <div class="panel owner-only" id="p-owner">
-    <div class="section-note">Owner dashboard is the platform control surface for licensing, pricing overrides, lead management, and company-level visibility. It is separate from the company-admin operations page.</div>
-
-    <div class="results-grid">
-      <div class="metric c-blue"><div class="metric-label">COMPANIES</div><div class="metric-value" id="m-owner-companies">—</div></div>
-      <div class="metric c-green"><div class="metric-label">ACTIVE LICENSES</div><div class="metric-value" id="m-owner-licenses">—</div></div>
-      <div class="metric c-amber"><div class="metric-label">LEADS</div><div class="metric-value" id="m-owner-leads">—</div></div>
-      <div class="metric c-purple"><div class="metric-label">COMPANY USERS</div><div class="metric-value" id="m-owner-users">—</div></div>
-    </div>
+    <div class="section-note">Owner dashboard shows only the top platform KPIs. Detailed user, activity, and pricing controls are separated into their own owner sections.</div>
 
     <div class="owner-control-grid">
       <div class="card">
         <div class="card-header"><div class="card-title">Companies & Active Licensing</div><div class="card-num">OWNER-01</div></div>
-        <div id="owner-companies-table"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Owner data will appear here after owner login.</p></div>
+        <div class="results-grid">
+          <div class="metric c-blue"><div class="metric-label">COMPANIES</div><div class="metric-value" id="m-owner-companies">—</div></div>
+          <div class="metric c-green"><div class="metric-label">ACTIVE LICENSES</div><div class="metric-value" id="m-owner-licenses">—</div></div>
+        </div>
       </div>
       <div class="card">
         <div class="card-header"><div class="card-title">Leads, Demo & Quote Requests</div><div class="card-num">OWNER-02</div></div>
-        <div id="owner-leads-table"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Lead requests will appear here after owner login.</p></div>
+        <div class="results-grid">
+          <div class="metric c-amber"><div class="metric-label">TOTAL LEADS</div><div class="metric-value" id="m-owner-leads">—</div></div>
+          <div class="metric c-blue"><div class="metric-label">DEMO REQUESTS</div><div class="metric-value" id="m-owner-demos">—</div></div>
+          <div class="metric c-purple"><div class="metric-label">QUOTE REQUESTS</div><div class="metric-value" id="m-owner-quotes">—</div></div>
+        </div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-header"><div class="card-title">Company Pricing Override</div><div class="card-num">OWNER-03</div></div>
-      <div class="owner-form-grid">
-        <div class="field">
-          <label>COMPANY</label>
-          <select id="owner-pricing-company">
-            <option value="">Select company</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>PLAN</label>
-          <select id="owner-pricing-plan">
-            <option value="annual_5">Up to 5 Users</option>
-            <option value="annual_10">6 to 10 Users</option>
-            <option value="annual_15">11 to 15 Users</option>
-            <option value="source">Source License</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>CUSTOM PRICE (₹ / YEAR OR LICENSE)</label>
-          <input type="number" id="owner-pricing-amount" value="25000" step="1000" min="1">
-        </div>
-        <div class="field">
-          <label>CUSTOM USER LIMIT</label>
-          <input type="number" id="owner-pricing-user-limit" value="" step="1" min="1" placeholder="Optional override">
-        </div>
-        <div class="field" style="grid-column:1 / -1;">
-          <label>OWNER NOTE</label>
-          <input type="text" id="owner-pricing-note" placeholder="Reason or pricing strategy note">
-        </div>
-      </div>
-      <div class="auth-form-actions" style="margin-top:14px;">
-        <button class="btn btn-primary" type="button" id="owner-save-pricing-btn">Save Company Pricing</button>
-      </div>
-      <div id="owner-pricing-note-status" class="admin-note">Choose a company and plan to override pricing for a specific account.</div>
+      <div class="card-header"><div class="card-title">Owner Notes</div><div class="card-num">OWNER-03</div></div>
+      <div id="owner-summary-note" class="admin-note">Run the backend server and sign in with the owner account to view owner KPIs.</div>
     </div>
+  </div>
 
+  <div class="panel owner-only" id="p-owner-users">
+    <div class="section-note">Owner user management is separated from company-admin operations and shows platform users across companies.</div>
+    <div class="results-grid">
+      <div class="metric c-purple"><div class="metric-label">COMPANY USERS</div><div class="metric-value" id="m-owner-users">—</div></div>
+      <div class="metric c-blue"><div class="metric-label">DAU</div><div class="metric-value" id="m-owner-dau">—</div></div>
+    </div>
     <div class="card">
-      <div class="card-header"><div class="card-title">Owner Notes</div><div class="card-num">OWNER-04</div></div>
-      <div id="owner-summary-note" class="admin-note">Run the backend server and sign in with the owner account to manage licenses, leads, and pricing overrides.</div>
+      <div class="card-header"><div class="card-title">Owner User Management</div><div class="card-num">OWNER-USERS</div></div>
+      <div id="owner-users-table"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">User records will appear here after owner login.</p></div>
+    </div>
+  </div>
+
+  <div class="panel owner-only" id="p-owner-dau">
+    <div class="section-note">Daily active users and activity trend are reported separately from the owner dashboard KPIs.</div>
+    <div class="owner-control-grid">
+      <div class="card">
+        <div class="card-header"><div class="card-title">DAU Table</div><div class="card-num">OWNER-DAU-01</div></div>
+        <div id="owner-dau-table"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Daily active user analytics will appear here after owner login.</p></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">DAU Trend</div><div class="card-num">OWNER-DAU-02</div></div>
+        <div id="owner-dau-trend"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Activity trend graph will appear here after owner login.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel owner-only" id="p-owner-pricing">
+    <div class="section-note">Company pricing override is isolated from dashboard KPIs so owner pricing actions stay explicit and auditable.</div>
+    <div class="owner-control-grid">
+      <div class="card">
+        <div class="card-header"><div class="card-title">Company Pricing Override</div><div class="card-num">OWNER-PRICE-01</div></div>
+        <div class="owner-form-grid">
+          <div class="field">
+            <label>COMPANY</label>
+            <select id="owner-pricing-company">
+              <option value="">Select company</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>PLAN</label>
+            <select id="owner-pricing-plan">
+              <option value="annual_5">Up to 5 Users</option>
+              <option value="annual_10">6 to 10 Users</option>
+              <option value="annual_15">11 to 15 Users</option>
+              <option value="source">Source License</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>CUSTOM PRICE (₹ / YEAR OR LICENSE)</label>
+            <input type="number" id="owner-pricing-amount" value="25000" step="1000" min="1">
+          </div>
+          <div class="field">
+            <label>CUSTOM USER LIMIT</label>
+            <input type="number" id="owner-pricing-user-limit" value="" step="1" min="1" placeholder="Optional override">
+          </div>
+          <div class="field" style="grid-column:1 / -1;">
+            <label>OWNER NOTE</label>
+            <input type="text" id="owner-pricing-note" placeholder="Reason or pricing strategy note">
+          </div>
+        </div>
+        <div class="auth-form-actions" style="margin-top:14px;">
+          <button class="btn btn-primary" type="button" id="owner-save-pricing-btn">Save Company Pricing</button>
+        </div>
+        <div id="owner-pricing-note-status" class="admin-note">Choose a company and plan to override pricing for a specific account.</div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">Pricing Override History</div><div class="card-num">OWNER-PRICE-02</div></div>
+        <div id="owner-pricing-overrides-table"><p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Active pricing overrides will appear here after owner login.</p></div>
+      </div>
     </div>
   </div>
 
@@ -3907,11 +4337,14 @@ function show(panel) {
 <script src="psychroChart.js"></script>
 <script src="diffuserLayout.js"></script>
 <script src="equipmentEngine.js"></script>
+<script src="engineeringCore.js"></script>
 <script src="apiClient.js"></script>
 <script src="authManager.js"></script>
 <script src="projectManager.js"></script>
 <script src="costingEngine.js"></script>
 <script src="schematic3d.js"></script>
+<script src="optimizationEngine.js"></script>
 <script src="hvacPlatform.js"></script>
+<script src="aiDesignerUI.js"></script>
 </body>
 </html>

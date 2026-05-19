@@ -9,12 +9,16 @@ const { spawn } = require("child_process");
 const { URL } = require("url");
 const { createPostgresStore } = require("./postgresStore");
 const EmailService = require("./emailService");
+const ashrae = require("./engine/ashrae");
+const designer = require("./engine/ashrae/designer");
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const ROOT = __dirname;
 const SESSION_COOKIE = "muskit_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const OWNER_OTP_TTL_MS = 1000 * 60 * 10;
+const OWNER_OTP_MAX_ATTEMPTS = 5;
 const PBKDF2_ITERATIONS = 210000;
 const KEY_LENGTH = 32;
 const DIGEST = "sha256";
@@ -22,6 +26,7 @@ const SOURCE_LICENSE_USER_LIMIT = 999;
 const PUBLIC_FILES = new Set([
   "contact copy 2.html",
   "favicon.svg",
+  "engineeringCore.js",
   "solarEngine.js",
   "psychroChart.js",
   "diffuserLayout.js",
@@ -32,10 +37,13 @@ const PUBLIC_FILES = new Set([
   "projectManager.js",
   "costingEngine.js",
   "schematic3d.js",
-  "hvacPlatform.js"
+  "optimizationEngine.js",
+  "hvacPlatform.js",
+  "aiDesignerUI.js"
 ]);
 
 const store = createPostgresStore();
+const ownerOtpChallenges = new Map();
 
 function slugify(text) {
   return String(text || "value")
@@ -64,6 +72,16 @@ function cleanText(value) {
 function integerOrDefault(value, fallback) {
   const parsed = parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function numberOrDefault(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function roundNumber(value, digits) {
+  const factor = Math.pow(10, digits || 0);
+  return Math.round((numberOrDefault(value, 0) * factor)) / factor;
 }
 
 function nowIso() {
@@ -127,6 +145,10 @@ function randomPassword() {
   return crypto.randomBytes(9).toString("base64url");
 }
 
+function randomOtp() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+}
+
 function createCompanyId(companyName) {
   return "company-" + slugify(companyName) + "-" + randomToken(3);
 }
@@ -184,7 +206,7 @@ function requestBaseUrl(req) {
 }
 
 function appBaseUrl(req) {
-  return cleanText(process.env.APP_URL) || requestBaseUrl(req);
+  return cleanText(process.env.APP_URL || process.env.APP_BASE_URL || process.env.PUBLIC_APP_URL) || requestBaseUrl(req);
 }
 
 function parseBody(req) {
@@ -212,6 +234,26 @@ function parseBody(req) {
   });
 }
 
+function parseRawBody(req) {
+  return new Promise(function (resolve, reject) {
+    const chunks = [];
+    let length = 0;
+    req.on("data", function (chunk) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      chunks.push(buffer);
+      length += buffer.length;
+      if (length > 1024 * 1024) {
+        reject(new Error("Payload too large"));
+        req.destroy();
+      }
+    });
+    req.on("end", function () {
+      resolve(Buffer.concat(chunks, length));
+    });
+    req.on("error", reject);
+  });
+}
+
 function sendJson(res, statusCode, payload) {
   const text = JSON.stringify(payload);
   res.writeHead(statusCode, {
@@ -219,6 +261,513 @@ function sendJson(res, statusCode, payload) {
     "Content-Length": Buffer.byteLength(text)
   });
   res.end(text);
+}
+
+function openAiModel() {
+  return cleanText(process.env.OPENAI_MODEL || process.env.OPENAI_RESPONSES_MODEL || "gpt-5.4-mini");
+}
+
+function normalizeAdvisorSeverity(value) {
+  const normalized = cleanText(value).toLowerCase();
+  if (normalized === "critical") {
+    return "critical";
+  }
+  if (normalized === "warning" || normalized === "review") {
+    return "warning";
+  }
+  return "advisory";
+}
+
+function extractOpenAiResponseText(payload) {
+  if (payload && typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  const output = Array.isArray(payload && payload.output) ? payload.output : [];
+  const textParts = [];
+  output.forEach(function (entry) {
+    const content = Array.isArray(entry && entry.content) ? entry.content : [];
+    content.forEach(function (part) {
+      if (part && typeof part.text === "string" && part.text.trim()) {
+        textParts.push(part.text.trim());
+      }
+    });
+  });
+  return textParts.join("\n").trim();
+}
+
+function parseLooseJson(text) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) {
+      return null;
+    }
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch (innerError) {
+      return null;
+    }
+  }
+}
+
+function sanitizeAdvisorItem(item) {
+  const suggestion = item || {};
+  const title = cleanText(suggestion.title || suggestion.heading || suggestion.name);
+  const recommendation = cleanText(suggestion.recommendation || suggestion.action || suggestion.fix);
+  if (!title || !recommendation) {
+    return null;
+  }
+  return {
+    severity: normalizeAdvisorSeverity(suggestion.severity),
+    category: cleanText(suggestion.category || "design") || "design",
+    title: title,
+    issue: cleanText(suggestion.issue || suggestion.problem || ""),
+    recommendation: recommendation,
+    basis: cleanText(suggestion.basis || suggestion.reasoning || suggestion.rationale || ""),
+    why: cleanText(suggestion.why || suggestion.justification || ""),
+    tradeoff: cleanText(suggestion.tradeoff || suggestion.trade_off || ""),
+    whenToUse: cleanText(suggestion.whenToUse || suggestion.when_to_use || ""),
+    confidenceScore: roundNumber(numberOrDefault(suggestion.confidenceScore || suggestion.confidence_score, 0), 2),
+    complianceStatus: cleanText(suggestion.complianceStatus || suggestion.compliance_status || "")
+  };
+}
+
+function sanitizeAdvisorPayload(payload, fallbackAdvisor) {
+  const parsed = payload || {};
+  const fallback = fallbackAdvisor || { provider: "local_rules", summary: "", items: [] };
+  const items = (Array.isArray(parsed.items) ? parsed.items : Array.isArray(parsed.suggestions) ? parsed.suggestions : [])
+    .map(sanitizeAdvisorItem)
+    .filter(Boolean)
+    .slice(0, 6);
+  const summary = cleanText(parsed.summary || parsed.overview || (items[0] && items[0].recommendation) || fallback.summary);
+  return {
+    provider: "openai",
+    summary: summary || fallback.summary || "Design review assistant is ready.",
+    items: items.length ? items : (fallback.items || [])
+  };
+}
+
+function sanitizeStringList(value) {
+  const rawList = Array.isArray(value)
+    ? value
+    : typeof value === "string" && value.trim()
+      ? value.split(/\s*\|\s*|\s*;\s*/)
+      : [];
+  return rawList
+    .map(function (entry) { return cleanText(entry); })
+    .filter(Boolean)
+    .slice(0, 4);
+}
+
+function sanitizeAlternativeOption(option) {
+  const candidate = option || {};
+  const title = cleanText(candidate.title || candidate.name || candidate.heading);
+  const systemType = cleanText(candidate.systemType || candidate.system || candidate.architecture);
+  if (!title || !systemType) {
+    return null;
+  }
+
+  return {
+    key: cleanText(candidate.key || slugify(title).replace(/-/g, "_")) || "alternative",
+    title: title,
+    intent: cleanText(candidate.intent || candidate.category || "balanced") || "balanced",
+    systemType: systemType,
+    scope: cleanText(candidate.scope || candidate.complianceScope || candidate.scopeNote),
+    airflowCfm: roundNumber(numberOrDefault(candidate.airflowCfm || candidate.airflow_cfm, 0), 0),
+    ach: roundNumber(numberOrDefault(candidate.ach, 0), 1),
+    capexDeltaPercent: roundNumber(numberOrDefault(candidate.capexDeltaPercent || candidate.capex_delta_percent, 0), 0),
+    energyDeltaPercent: roundNumber(numberOrDefault(candidate.energyDeltaPercent || candidate.energy_delta_percent, 0), 0),
+    costScore: roundNumber(numberOrDefault(candidate.costScore || candidate.cost_score, 0), 0),
+    efficiencyScore: roundNumber(numberOrDefault(candidate.efficiencyScore || candidate.efficiency_score, 0), 0),
+    complianceScore: roundNumber(numberOrDefault(candidate.complianceScore || candidate.compliance_score, 0), 0),
+    complianceStatus: cleanText(candidate.complianceStatus || candidate.compliance_status || ""),
+    confidenceScore: roundNumber(numberOrDefault(candidate.confidenceScore || candidate.confidence_score, 0), 2),
+    strengths: sanitizeStringList(candidate.strengths),
+    tradeoffs: sanitizeStringList(candidate.tradeoffs),
+    actions: sanitizeStringList(candidate.actions || candidate.recommendations),
+    why: cleanText(candidate.why || candidate.justification || ""),
+    whenToUse: cleanText(candidate.whenToUse || candidate.when_to_use || "")
+  };
+}
+
+function sanitizeAlternativesPayload(payload, fallbackAlternatives) {
+  const parsed = payload || {};
+  const fallback = fallbackAlternatives || { provider: "local_rules", summary: "", options: [] };
+  const options = (Array.isArray(parsed.options) ? parsed.options : Array.isArray(parsed.alternatives) ? parsed.alternatives : [])
+    .map(sanitizeAlternativeOption)
+    .filter(Boolean)
+    .slice(0, 4);
+  const preferredOptionKey = cleanText(parsed.preferredOptionKey || parsed.preferred_key || (options[0] && options[0].key));
+  return {
+    provider: "openai",
+    summary: cleanText(parsed.summary || parsed.overview || fallback.summary) || "Alternative concepts are ready.",
+    preferredOptionKey: preferredOptionKey || (fallback.preferredOptionKey || (options[0] && options[0].key) || "balanced"),
+    standardsNote: cleanText(parsed.standardsNote || parsed.basis || fallback.standardsNote),
+    options: options.length ? options : (fallback.options || [])
+  };
+}
+
+let engineeringCoreModule = null;
+
+function engineeringCore() {
+  if (!engineeringCoreModule) {
+    try {
+      engineeringCoreModule = require("./engineeringCore.js");
+    } catch (error) {
+      engineeringCoreModule = {};
+    }
+  }
+  return engineeringCoreModule;
+}
+
+function truthyArray(value) {
+  return Array.isArray(value) ? value.filter(Boolean) : [];
+}
+
+function confidenceOf(value, fallback) {
+  return roundNumber(numberOrDefault(value, fallback == null ? 0.75 : fallback), 2);
+}
+
+function designValidationFromPayload(payload) {
+  const context = payload || {};
+  const validation = context.validation && typeof context.validation === "object" ? context.validation : null;
+  if (validation && validation.status) {
+    return validation;
+  }
+  const core = engineeringCore();
+  if (core && typeof core.buildDesignValidation === "function") {
+    return core.buildDesignValidation(context);
+  }
+  return {
+    status: "REVIEW",
+    summary: "Validation context was incomplete.",
+    findings: [],
+    confidenceScore: 0.5
+  };
+}
+
+function buildTrustedLocalAdvisor(payload) {
+  const context = payload || {};
+  const validation = designValidationFromPayload(context);
+  const localAdvisor = context.localAdvisor && typeof context.localAdvisor === "object"
+    ? sanitizeAdvisorPayload(context.localAdvisor, {
+        provider: "local_rules",
+        summary: validation.summary || "",
+        items: []
+      })
+    : null;
+  const core = engineeringCore();
+
+  if (localAdvisor && truthyArray(localAdvisor.items).length) {
+    return Object.assign({}, localAdvisor, {
+      provider: cleanText(localAdvisor.provider || "local_rules") || "local_rules",
+      summary: cleanText(localAdvisor.summary || validation.summary) || validation.summary || "Design review assistant is ready."
+    });
+  }
+
+  if (core && typeof core.buildDesignIntelligenceReport === "function") {
+    const report = core.buildDesignIntelligenceReport(context);
+    const items = truthyArray(report && report.rootCauseAnalysis).slice(0, 5).map(function (entry) {
+      const firstCause = truthyArray(entry.rootCauses)[0];
+      return sanitizeAdvisorItem({
+        severity: normalizeAdvisorSeverity(entry.severity || "warning"),
+        category: entry.category || "design",
+        title: entry.problem || entry.key || "Design issue identified",
+        issue: firstCause && firstCause.explanation ? firstCause.explanation : (entry.impact || ""),
+        recommendation: entry.recommendation || entry.problem || validation.summary || "Review the current design state.",
+        basis: entry.impact || ((firstCause && firstCause.evidence && firstCause.evidence.join(" | ")) || ""),
+        why: entry.impact || "",
+        tradeoff: "",
+        whenToUse: "",
+        confidenceScore: confidenceOf(entry.confidenceScore, validation.confidenceScore),
+        complianceStatus: validation.status || "REVIEW"
+      });
+    }).filter(Boolean);
+    if (items.length) {
+      return {
+        provider: "local_reasoning",
+        summary: cleanText(report && report.executiveSummary) || validation.summary || "Design review assistant is ready.",
+        items: items
+      };
+    }
+  }
+
+  return {
+    provider: "local_rules",
+    summary: cleanText(validation.summary) || "Design review assistant is ready.",
+    items: truthyArray(validation.findings).slice(0, 5).map(function (finding) {
+      return sanitizeAdvisorItem({
+        severity: finding.severity || "warning",
+        category: finding.category || "design",
+        title: finding.title || finding.code || "Design issue identified",
+        issue: finding.detail || "",
+        recommendation: finding.recommendation || validation.summary || "Review the current design state.",
+        basis: finding.basis || "",
+        confidenceScore: confidenceOf(validation.confidenceScore, 0.7),
+        complianceStatus: finding.complianceStatus || validation.status || "REVIEW"
+      });
+    }).filter(Boolean)
+  };
+}
+
+function rankAlternativeOption(option) {
+  const candidate = option || {};
+  const complianceStatus = cleanText(candidate.complianceStatus || "").toUpperCase();
+  const complianceRank = complianceStatus === "COMPLIANT" ? 3 : complianceStatus === "REVIEW" ? 2 : complianceStatus === "NON_COMPLIANT" ? 1 : 0;
+  const simulationRank = candidate.simulationBacked === true ? 1 : 0;
+  const decisionScore = numberOrDefault(candidate.decisionScore, numberOrDefault(candidate.complianceScore, 0));
+  return (complianceRank * 1000) + (simulationRank * 100) + decisionScore;
+}
+
+function normalizeAlternativesOption(option, validationStatus) {
+  const normalized = sanitizeAlternativeOption(option);
+  if (!normalized) {
+    return null;
+  }
+  if (!normalized.complianceStatus) {
+    normalized.complianceStatus = validationStatus || "REVIEW";
+  }
+  if (option && option.simulationBacked === true) {
+    normalized.simulationBacked = true;
+  }
+  if (option && option.decisionScore != null) {
+    normalized.decisionScore = roundNumber(numberOrDefault(option.decisionScore, 0), 1);
+  }
+  return normalized;
+}
+
+function buildTrustedLocalAlternatives(payload) {
+  const context = payload || {};
+  const validation = designValidationFromPayload(context);
+  const localAlternatives = context.localAlternatives && typeof context.localAlternatives === "object"
+    ? context.localAlternatives
+    : null;
+  const options = truthyArray(localAlternatives && localAlternatives.options)
+    .map(function (option) {
+      return normalizeAlternativesOption(option, validation.status);
+    })
+    .filter(Boolean)
+    .sort(function (left, right) {
+      return rankAlternativeOption(right) - rankAlternativeOption(left);
+    });
+  const preferredOptionKey = cleanText(localAlternatives && localAlternatives.preferredOptionKey);
+  const preferredOption = options.find(function (option) {
+    return option.key === preferredOptionKey;
+  });
+  const bestOption = preferredOption && preferredOption.complianceStatus !== "NON_COMPLIANT"
+    ? preferredOption
+    : options.find(function (option) {
+        return option.complianceStatus !== "NON_COMPLIANT";
+      }) || options[0] || null;
+
+  return {
+    provider: cleanText(localAlternatives && localAlternatives.provider) || "local_rules",
+    summary: cleanText(localAlternatives && localAlternatives.summary) || validation.summary || "Alternative concepts are ready.",
+    preferredOptionKey: bestOption ? bestOption.key : "",
+    standardsNote: cleanText(localAlternatives && localAlternatives.standardsNote)
+      || "Only engineering-consistent alternative concepts should be treated as viable recommendations.",
+    options: options
+  };
+}
+
+function reconcileAdvisorWithEngineering(candidateAdvisor, trustedAdvisor, validation) {
+  const trusted = trustedAdvisor || { provider: "local_rules", summary: "", items: [] };
+  const normalized = sanitizeAdvisorPayload(candidateAdvisor, trusted);
+  const validationStatus = validation && validation.status ? validation.status : "REVIEW";
+  const items = truthyArray(normalized.items).map(function (item) {
+    return Object.assign({}, item, {
+      complianceStatus: cleanText(item.complianceStatus || validationStatus) || validationStatus,
+      confidenceScore: confidenceOf(item.confidenceScore, validation && validation.confidenceScore)
+    });
+  });
+  const summaryPrefix = validationStatus === "NON_COMPLIANT"
+    ? "Engineering status: NON_COMPLIANT. "
+    : validationStatus === "REVIEW"
+      ? "Engineering status: REVIEW. "
+      : "";
+  return {
+    provider: normalized.provider || trusted.provider || "openai",
+    summary: summaryPrefix + (cleanText(normalized.summary) || cleanText(trusted.summary) || "Design review assistant is ready."),
+    items: items.length ? items : truthyArray(trusted.items)
+  };
+}
+
+function reconcileAlternativesWithEngineering(candidateAlternatives, trustedAlternatives, validation) {
+  const trusted = trustedAlternatives || { provider: "local_rules", summary: "", preferredOptionKey: "", options: [] };
+  const normalized = sanitizeAlternativesPayload(candidateAlternatives, trusted);
+  const validationStatus = validation && validation.status ? validation.status : "REVIEW";
+  const options = truthyArray(normalized.options)
+    .map(function (option) {
+      return normalizeAlternativesOption(option, validationStatus);
+    })
+    .filter(Boolean)
+    .sort(function (left, right) {
+      return rankAlternativeOption(right) - rankAlternativeOption(left);
+    });
+  const preferred = options.find(function (option) {
+    return option.key === normalized.preferredOptionKey;
+  });
+  const best = preferred && preferred.complianceStatus !== "NON_COMPLIANT"
+    ? preferred
+    : options.find(function (option) {
+        return option.complianceStatus !== "NON_COMPLIANT";
+      }) || options[0] || null;
+  return {
+    provider: normalized.provider || trusted.provider || "openai",
+    summary: cleanText(normalized.summary) || cleanText(trusted.summary) || "Alternative concepts are ready.",
+    preferredOptionKey: best ? best.key : "",
+    standardsNote: cleanText(normalized.standardsNote) || cleanText(trusted.standardsNote),
+    options: options.length ? options : truthyArray(trusted.options)
+  };
+}
+
+// Produce a short engineering narrative for an already-computed design.
+// AI here is *narrating* engine output, NOT generating numbers. Any numeric
+// claim must come from the design object; the prompt forbids inventing values.
+async function narrateDesign(design) {
+  const apiKey = cleanText(process.env.OPENAI_API_KEY);
+  if (!apiKey) return null;
+  const prompt = [
+    "You are a senior HVAC consulting engineer.",
+    "Given a fully computed ASHRAE-correct design (JSON below), produce a short",
+    "engineering narrative explaining the design intent in plain language.",
+    "ABSOLUTE RULES:",
+    "- Quote ONLY numbers that appear in the JSON. Do not invent or round-trip.",
+    "- Always cite the ASHRAE chapter or standard supporting any non-trivial choice.",
+    "- If a parameter is missing, say so; do not fabricate.",
+    "Return JSON: {\"summary\":\"...\",\"design_decisions\":[\"...\"],\"risks\":[\"...\"],\"next_steps\":[\"...\"]}"
+  ].join("\n");
+  const response = await globalThis.fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
+    body: JSON.stringify({
+      model: openAiModel(),
+      reasoning: { effort: "low" },
+      input: prompt + "\n\nDESIGN JSON:\n" + JSON.stringify(design),
+      max_output_tokens: 900
+    })
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) return null;
+  const text = extractOpenAiResponseText(data);
+  return parseLooseJson(text);
+}
+
+async function generateOpenAiDesignAdvisor(payload) {
+  const apiKey = cleanText(process.env.OPENAI_API_KEY);
+  const trustedAdvisor = buildTrustedLocalAdvisor(payload || {});
+  const trustedValidation = designValidationFromPayload(payload || {});
+  if (!apiKey) {
+    return trustedAdvisor;
+  }
+
+  const fallbackAdvisor = trustedAdvisor;
+  const prompt = [
+    "You are a senior HVAC design review engineer.",
+    "Use only the values present in the supplied JSON context.",
+    "Treat the validation object as the governing engineering truth unless it contradicts the numeric context.",
+    "Turn diagnostics into practical, specific corrective actions for HVAC engineers.",
+    "Reject generic advice. Every recommendation must say why it matters, the main tradeoff, and when the recommendation should be used.",
+    "Call out non-compliance explicitly when the design violates airflow, ventilation, or psychrometric consistency constraints.",
+    "Do not invent missing measurements, standards clauses, or equipment data.",
+    "Return strict JSON with this shape only:",
+    "{\"summary\":\"...\",\"items\":[{\"severity\":\"critical|warning|advisory\",\"category\":\"...\",\"title\":\"...\",\"issue\":\"...\",\"recommendation\":\"...\",\"basis\":\"...\",\"why\":\"...\",\"tradeoff\":\"...\",\"whenToUse\":\"...\",\"confidenceScore\":0.0,\"complianceStatus\":\"COMPLIANT|REVIEW|NON_COMPLIANT\"}]}",
+    "Limit the list to at most 5 items and sort from highest priority to lowest priority."
+  ].join("\n");
+
+  const response = await globalThis.fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + apiKey
+    },
+    body: JSON.stringify({
+      model: openAiModel(),
+      reasoning: {
+        effort: "medium"
+      },
+      input: prompt + "\n\nHVAC DESIGN CONTEXT JSON:\n" + JSON.stringify(payload || {}),
+      max_output_tokens: 1400
+    })
+  });
+
+  const data = await response.json().catch(function () {
+    return null;
+  });
+
+  if (!response.ok) {
+    throw new Error(data && data.error && data.error.message ? data.error.message : "OpenAI design advisor request failed.");
+  }
+
+  const text = extractOpenAiResponseText(data);
+  const parsed = parseLooseJson(text);
+  if (!parsed) {
+    throw new Error("OpenAI design advisor returned an unreadable response.");
+  }
+
+  return reconcileAdvisorWithEngineering(parsed, fallbackAdvisor, trustedValidation);
+}
+
+async function generateOpenAiDesignAlternatives(payload) {
+  const apiKey = cleanText(process.env.OPENAI_API_KEY);
+  const trustedAlternatives = buildTrustedLocalAlternatives(payload || {});
+  const trustedValidation = designValidationFromPayload(payload || {});
+  if (!apiKey) {
+    return trustedAlternatives;
+  }
+
+  const fallbackAlternatives = trustedAlternatives;
+  const prompt = [
+    "You are a senior HVAC concept design engineer.",
+    "Use only the values present in the supplied JSON context.",
+    "Treat the validation object as a hard constraint set. Do not present invalid concepts as preferred options.",
+    "Prepare alternative HVAC design concepts that compare cost, efficiency, and compliance fit.",
+    "Every option must explain why it is suitable and when it should be used.",
+    "Do not invent standards clauses, equipment models, or project facts that are not in the JSON.",
+    "If cleanroom mode is present, respect the ISO class target and explain scope changes clearly.",
+    "Return strict JSON with this shape only:",
+    "{\"summary\":\"...\",\"preferredOptionKey\":\"...\",\"standardsNote\":\"...\",\"options\":[{\"key\":\"...\",\"title\":\"...\",\"intent\":\"cost_effective|balanced|efficient\",\"systemType\":\"...\",\"scope\":\"...\",\"airflowCfm\":0,\"ach\":0,\"capexDeltaPercent\":0,\"energyDeltaPercent\":0,\"costScore\":0,\"efficiencyScore\":0,\"complianceScore\":0,\"complianceStatus\":\"COMPLIANT|REVIEW|NON_COMPLIANT\",\"confidenceScore\":0.0,\"strengths\":[\"...\"],\"tradeoffs\":[\"...\"],\"actions\":[\"...\"],\"why\":\"...\",\"whenToUse\":\"...\"}]}",
+    "Limit the list to at most 3 options."
+  ].join("\n");
+
+  const response = await globalThis.fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + apiKey
+    },
+    body: JSON.stringify({
+      model: openAiModel(),
+      reasoning: {
+        effort: "medium"
+      },
+      input: prompt + "\n\nHVAC ALTERNATIVES CONTEXT JSON:\n" + JSON.stringify(payload || {}),
+      max_output_tokens: 1800
+    })
+  });
+
+  const data = await response.json().catch(function () {
+    return null;
+  });
+
+  if (!response.ok) {
+    throw new Error(data && data.error && data.error.message ? data.error.message : "OpenAI design alternatives request failed.");
+  }
+
+  const text = extractOpenAiResponseText(data);
+  const parsed = parseLooseJson(text);
+  if (!parsed) {
+    throw new Error("OpenAI design alternatives returned an unreadable response.");
+  }
+
+  return reconcileAlternativesWithEngineering(parsed, fallbackAlternatives, trustedValidation);
 }
 
 function requestIsPotentiallyTrustworthy(req) {
@@ -267,29 +816,56 @@ function parseCookies(req) {
   }, {});
 }
 
-function sessionCookie(token) {
+function headerSessionToken(req) {
+  const directHeader = cleanText(req && req.headers && req.headers["x-session-token"]);
+  if (directHeader) {
+    return directHeader;
+  }
+
+  const authorization = cleanText(req && req.headers && req.headers.authorization);
+  if (/^bearer\s+/i.test(authorization)) {
+    return authorization.replace(/^bearer\s+/i, "").trim();
+  }
+
+  return "";
+}
+
+function shouldSetSecureCookie(req) {
+  const explicit = cleanText(process.env.SESSION_COOKIE_SECURE || process.env.COOKIE_SECURE).toLowerCase();
+  if (["1", "true", "yes", "on"].includes(explicit)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(explicit)) {
+    return false;
+  }
+
+  const forwardedProto = cleanText(req && req.headers && req.headers["x-forwarded-proto"]).split(",")[0].toLowerCase();
+  return !!((req && req.socket && req.socket.encrypted) || forwardedProto === "https");
+}
+
+function sessionCookie(token, req) {
   const attributes = [
     SESSION_COOKIE + "=" + encodeURIComponent(token),
     "Path=/",
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     "Max-Age=" + Math.floor(SESSION_TTL_MS / 1000)
   ];
-  if (process.env.NODE_ENV === "production") {
+  if (shouldSetSecureCookie(req)) {
     attributes.push("Secure");
   }
   return attributes.join("; ");
 }
 
-function clearSessionCookie() {
+function clearSessionCookie(req) {
   const attributes = [
     SESSION_COOKIE + "=",
     "Path=/",
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     "Max-Age=0"
   ];
-  if (process.env.NODE_ENV === "production") {
+  if (shouldSetSecureCookie(req)) {
     attributes.push("Secure");
   }
   return attributes.join("; ");
@@ -306,13 +882,25 @@ function isCompanyAdmin(user) {
 function razorpayConfig() {
   return {
     keyId: String(process.env.RAZORPAY_KEY_ID || "").trim(),
-    keySecret: String(process.env.RAZORPAY_KEY_SECRET || "").trim()
+    keySecret: String(process.env.RAZORPAY_KEY_SECRET || "").trim(),
+    webhookSecret: String(process.env.RAZORPAY_WEBHOOK_SECRET || "").trim()
   };
 }
 
 function razorpayEnabled() {
   const config = razorpayConfig();
   return !!(config.keyId && config.keySecret && globalThis.fetch);
+}
+
+function razorpayDiagnostics() {
+  const config = razorpayConfig();
+  return {
+    configured: razorpayEnabled(),
+    keyId: config.keyId ? config.keyId.slice(0, 8) + "..." + config.keyId.slice(-4) : "",
+    webhookConfigured: !!config.webhookSecret,
+    checkoutScript: "https://checkout.razorpay.com/v1/checkout.js",
+    currency: "INR"
+  };
 }
 
 async function callRazorpay(pathname, payload) {
@@ -347,6 +935,20 @@ function verifyRazorpaySignature(orderId, paymentId, signature) {
   const digest = crypto
     .createHmac("sha256", config.keySecret)
     .update(String(orderId) + "|" + String(paymentId))
+    .digest("hex");
+  const actual = Buffer.from(digest);
+  const expected = Buffer.from(String(signature || ""));
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function verifyRazorpayWebhook(rawBody, signature) {
+  const config = razorpayConfig();
+  if (!(config.webhookSecret && rawBody && signature)) {
+    return false;
+  }
+  const digest = crypto
+    .createHmac("sha256", config.webhookSecret)
+    .update(rawBody)
     .digest("hex");
   const actual = Buffer.from(digest);
   const expected = Buffer.from(String(signature || ""));
@@ -415,9 +1017,120 @@ async function createSession(user) {
   return token;
 }
 
+function isOwnerAccount(user) {
+  return String((user && user.role) || "user").toLowerCase() === "owner";
+}
+
+function cleanupOwnerOtpChallenges() {
+  const now = Date.now();
+  ownerOtpChallenges.forEach(function (challenge, challengeId) {
+    if (!challenge || challenge.expiresAtMs <= now) {
+      ownerOtpChallenges.delete(challengeId);
+    }
+  });
+}
+
+function ownerRequestIp(req) {
+  return cleanText((req.headers["x-forwarded-for"] || "").split(",")[0])
+    || (req.socket && req.socket.remoteAddress)
+    || "";
+}
+
+async function createOwnerOtpChallenge(user, req) {
+  cleanupOwnerOtpChallenges();
+  const otp = randomOtp();
+  const credential = createCredential(otp);
+  const challengeId = randomToken(16);
+  const expiresAtMs = Date.now() + OWNER_OTP_TTL_MS;
+  const expiresAt = new Date(expiresAtMs).toISOString();
+  const normalizedEmail = normalizeEmail(user.email);
+
+  ownerOtpChallenges.set(challengeId, {
+    id: challengeId,
+    userId: user.id,
+    email: normalizedEmail,
+    otpSalt: credential.salt,
+    otpHash: credential.hash,
+    attempts: 0,
+    expiresAtMs: expiresAtMs,
+    createdAt: nowIso()
+  });
+
+  const sendResult = await sendOwnerLoginOtpEmail({
+    to: normalizedEmail,
+    name: user.name,
+    otp: otp,
+    expiresAt: expiresAt,
+    ip: ownerRequestIp(req)
+  });
+
+  if (!sendResult || sendResult.ok === false) {
+    ownerOtpChallenges.delete(challengeId);
+    return {
+      ok: false,
+      error: sendResult && sendResult.error ? sendResult.error : "Owner OTP email could not be sent."
+    };
+  }
+
+  return {
+    ok: true,
+    challengeId: challengeId,
+    expiresAt: expiresAt,
+    email: normalizedEmail
+  };
+}
+
+async function verifyOwnerOtpChallenge(payload) {
+  cleanupOwnerOtpChallenges();
+  const challengeId = cleanText(payload.challengeId);
+  const email = normalizeEmail(payload.email);
+  const otp = cleanText(payload.otp);
+  const challenge = ownerOtpChallenges.get(challengeId);
+
+  if (!challenge) {
+    return { ok: false, status: 404, error: "Owner OTP challenge expired or was not found. Request a new OTP." };
+  }
+  if (!otp || !/^\d{6}$/.test(otp)) {
+    return { ok: false, status: 400, error: "Enter the 6-digit owner OTP." };
+  }
+  if (email && email !== challenge.email) {
+    return { ok: false, status: 400, error: "Owner OTP email does not match this challenge." };
+  }
+  if (challenge.expiresAtMs <= Date.now()) {
+    ownerOtpChallenges.delete(challengeId);
+    return { ok: false, status: 410, error: "Owner OTP expired. Request a new OTP." };
+  }
+  if (challenge.attempts >= OWNER_OTP_MAX_ATTEMPTS) {
+    ownerOtpChallenges.delete(challengeId);
+    return { ok: false, status: 429, error: "Too many invalid owner OTP attempts. Request a new OTP." };
+  }
+
+  const matches = verifyCredential(otp, challenge.otpSalt, challenge.otpHash);
+  if (!matches) {
+    challenge.attempts += 1;
+    ownerOtpChallenges.set(challengeId, challenge);
+    const remaining = Math.max(0, OWNER_OTP_MAX_ATTEMPTS - challenge.attempts);
+    return {
+      ok: false,
+      status: remaining ? 401 : 429,
+      error: remaining
+        ? "Incorrect owner OTP. " + remaining + " attempt" + (remaining === 1 ? "" : "s") + " remaining."
+        : "Too many invalid owner OTP attempts. Request a new OTP."
+    };
+  }
+
+  ownerOtpChallenges.delete(challengeId);
+  const user = await store.findUserByEmail(challenge.email);
+  if (!user || user.id !== challenge.userId || !isOwnerAccount(user)) {
+    return { ok: false, status: 403, error: "Owner account is no longer available for this OTP challenge." };
+  }
+
+  return { ok: true, user: user };
+}
+
 async function getSessionUser(req) {
   const cookies = parseCookies(req);
-  const token = cookies[SESSION_COOKIE];
+  const token = cookies[SESSION_COOKIE] || headerSessionToken(req);
   if (!token) {
     return { token: null, user: null };
   }
@@ -550,7 +1263,7 @@ async function requireAdmin(req, res) {
   if (!session) {
     return null;
   }
-  if (!isCompanyAdmin(session.user) && !isOwner(session.user)) {
+  if (!isCompanyAdmin(session.user)) {
     sendJson(res, 403, { ok: false, error: "Admin access required." });
     return null;
   }
@@ -574,8 +1287,20 @@ async function requireCompanyAdmin(req, res) {
   if (!session) {
     return null;
   }
-  if (!isCompanyAdmin(session.user) && !isOwner(session.user)) {
+  if (!isCompanyAdmin(session.user)) {
     sendJson(res, 403, { ok: false, error: "Company admin access required." });
+    return null;
+  }
+  return session;
+}
+
+async function requireDesignWorkspaceUser(req, res) {
+  const session = await requireAuth(req, res);
+  if (!session) {
+    return null;
+  }
+  if (isOwner(session.user)) {
+    sendJson(res, 403, { ok: false, error: "Owner sessions are limited to owner dashboard, user management, DAU, integrations, and pricing override functions." });
     return null;
   }
   return session;
@@ -916,6 +1641,39 @@ async function sendPasswordResetTokenEmail(payload) {
   });
 }
 
+async function sendOwnerLoginOtpEmail(payload) {
+  const html = renderEmailLayout({
+    preheader: "Use this one-time password to complete owner login.",
+    kicker: "Owner Login",
+    title: "Owner Login OTP",
+    summary: "A separate owner access flow was requested for the Musk-IT HVAC platform. Use the code below to complete sign-in.",
+    bodyHtml:
+      "<p style=\"margin:0 0 18px;font-family:Arial,sans-serif;font-size:15px;line-height:1.75;color:#334155;\">Hello "
+      + escapeEmailHtml(payload.name || "Owner")
+      + ", enter this OTP in the owner login screen after confirming your email and password.</p>"
+      + emailCard("Owner Access Code", emailCredentialRows([
+        { label: "One-Time Password", value: payload.otp },
+        { label: "Expires At", value: new Date(payload.expiresAt).toLocaleString("en-IN") }
+      ]))
+      + emailCard("Security Context", emailDetailsTable([
+        { label: "Account", value: payload.to },
+        { label: "Request IP", value: payload.ip || "Unknown" }
+      ]))
+      + "<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.75;color:#475569;\">If you did not request owner access, change the owner password and review active sessions immediately.</div>",
+    footer: "For security, this owner OTP expires in 10 minutes and can only be used once."
+  });
+
+  return EmailService.sendEmail({
+    to: payload.to,
+    subject: "Musk-IT HVAC owner login OTP",
+    html: html,
+    text:
+      "Owner login OTP: " + payload.otp + "\n"
+      + "Expires at: " + payload.expiresAt + "\n"
+      + "Request IP: " + (payload.ip || "Unknown") + "\n"
+  });
+}
+
 async function sendCompanyPricingEmail(payload) {
   if (!payload.to) {
     return {
@@ -1077,6 +1835,105 @@ async function ensureCompanyAdminUser(company, purchaser, licenseInfo) {
   };
 }
 
+async function activateLicenseForPaidPayment(payment, paymentInfo) {
+  if (!payment) {
+    throw new Error("Payment order was not found.");
+  }
+  if (payment.status === "paid" && payment.licenseId) {
+    const licenses = payment.companyId ? await store.listLicensesForCompany(payment.companyId) : [];
+    const existingLicense = licenses.find(function (entry) {
+      return entry.id === payment.licenseId;
+    });
+    return {
+      alreadyActivated: true,
+      license: existingLicense || null,
+      company: payment.companyId ? await store.findCompanyById(payment.companyId) : null,
+      adminAccount: null
+    };
+  }
+
+  const orderId = cleanText(paymentInfo && paymentInfo.orderId) || payment.gatewayOrderId;
+  const paymentId = cleanText(paymentInfo && paymentInfo.paymentId);
+  const signature = cleanText(paymentInfo && paymentInfo.signature);
+  const company = await ensureCompanyRecord(payment.companyName, payment.purchaserEmail, payment.purchaserPhone);
+  const resolvedPlan = await resolvePlanForRequest(payment.planCode, payment.requestedUsers, company.id);
+  const paymentMetadata = payment.metadata || {};
+  const lockedUserLimit = integerOrDefault(paymentMetadata.userLimit, 0);
+  const effectiveAmountInr = integerOrDefault(payment.amountInr, 0) || resolvedPlan.annualPriceInr;
+  const activatedAt = nowIso();
+  const endsAt = resolvedPlan.licenseType === "source" ? null : addMonthsIso(activatedAt, resolvedPlan.durationMonths);
+
+  const provisionalLicense = {
+    id: createLicenseId(company.name),
+    licenseNumber: createLicenseNumber(),
+    companyId: company.id,
+    planCode: resolvedPlan.planCode,
+    licenseType: resolvedPlan.licenseType,
+    userLimit: resolvedPlan.licenseType === "source" ? SOURCE_LICENSE_USER_LIMIT : (lockedUserLimit > 0 ? lockedUserLimit : resolvedPlan.userLimit),
+    amountInr: effectiveAmountInr,
+    currency: "INR",
+    durationMonths: resolvedPlan.durationMonths,
+    status: "active",
+    paymentStatus: "paid",
+    adminUserId: "",
+    startsAt: activatedAt,
+    endsAt: endsAt,
+    activatedAt: activatedAt,
+    metadata: {
+      paymentGateway: "razorpay",
+      orderId: orderId,
+      paymentId: paymentId,
+      activationSource: cleanText(paymentInfo && paymentInfo.source) || "checkout"
+    }
+  };
+
+  const license = await store.createLicense(provisionalLicense);
+  const adminResult = await ensureCompanyAdminUser(company, {
+    name: payment.purchaserName,
+    email: payment.purchaserEmail,
+    phone: payment.purchaserPhone
+  }, {
+    licenseNumber: license.licenseNumber,
+    planName: resolvedPlan.planName,
+    userLimit: license.userLimit,
+    endsAt: endsAt
+  });
+  const finalizedLicense = await store.updateLicenseAdminUser(license.id, adminResult.user.id) || license;
+
+  await store.markLicensePaymentPaid(payment.id, {
+    companyId: company.id,
+    licenseId: finalizedLicense.id,
+    gatewayPaymentId: paymentId,
+    gatewaySignature: signature,
+    metadata: {
+      adminUserId: adminResult.user.id,
+      emailSent: !!(adminResult.generatedCredentials && adminResult.generatedCredentials.emailSent),
+      activationSource: cleanText(paymentInfo && paymentInfo.source) || "checkout"
+    }
+  });
+  if (paymentMetadata.inviteId) {
+    await store.markLicenseCheckoutInvitePaid(paymentMetadata.inviteId, {
+      licenseId: finalizedLicense.id,
+      paymentId: paymentId
+    });
+  }
+  await store.updateCompanyActiveLicense(company.id, finalizedLicense.id, "active");
+
+  return {
+    alreadyActivated: false,
+    license: finalizedLicense,
+    company: company,
+    adminResult: adminResult,
+    adminAccount: {
+      email: adminResult.user.email,
+      username: adminResult.user.username || "",
+      emailSent: !!(adminResult.generatedCredentials && adminResult.generatedCredentials.emailSent),
+      temporaryPassword: adminResult.generatedCredentials && !adminResult.generatedCredentials.emailSent ? adminResult.generatedCredentials.password : "",
+      recoveryKey: adminResult.generatedCredentials && !adminResult.generatedCredentials.emailSent ? adminResult.generatedCredentials.recoveryKey : ""
+    }
+  };
+}
+
 function runEnergyCli(command, payload) {
   return new Promise(function (resolve, reject) {
     const pythonBin = process.env.PYTHON_BIN || "python3";
@@ -1153,6 +2010,10 @@ async function handleApi(req, res) {
     sendJson(res, 200, {
       ok: true,
       serverTime: nowIso(),
+      integrations: {
+        email: EmailService.diagnostics(),
+        razorpay: razorpayDiagnostics()
+      },
       capabilities: {
         auth: true,
         projects: true,
@@ -1164,8 +2025,63 @@ async function handleApi(req, res) {
         paymentsConfigured: razorpayEnabled(),
         emailConfigured: EmailService.isConfigured(),
         energySimulation: true,
-        energyComparison: true
+        energyComparison: true,
+        aiDesignAdvisor: !!cleanText(process.env.OPENAI_API_KEY),
+        aiDesignAlternatives: !!cleanText(process.env.OPENAI_API_KEY)
       }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/licensing/razorpay-webhook") {
+    const rawBody = await parseRawBody(req);
+    const signature = cleanText(req.headers["x-razorpay-signature"]);
+    if (!verifyRazorpayWebhook(rawBody, signature)) {
+      sendJson(res, 400, { ok: false, error: "Invalid Razorpay webhook signature." });
+      return;
+    }
+
+    const event = JSON.parse(rawBody.toString("utf8") || "{}");
+    const eventName = cleanText(event.event);
+    const paymentEntity = event && event.payload && event.payload.payment && event.payload.payment.entity
+      ? event.payload.payment.entity
+      : null;
+    const orderEntity = event && event.payload && event.payload.order && event.payload.order.entity
+      ? event.payload.order.entity
+      : null;
+    const orderId = cleanText(
+      paymentEntity && paymentEntity.order_id
+      || orderEntity && orderEntity.id
+      || ""
+    );
+    const paymentId = cleanText(paymentEntity && paymentEntity.id || "");
+
+    if (eventName !== "payment.captured" && eventName !== "order.paid") {
+      sendJson(res, 200, { ok: true, ignored: true, event: eventName });
+      return;
+    }
+    if (!orderId) {
+      sendJson(res, 200, { ok: true, ignored: true, event: eventName, reason: "No Razorpay order id on webhook event." });
+      return;
+    }
+
+    const payment = await store.findPaymentByOrderId(orderId);
+    if (!payment) {
+      sendJson(res, 200, { ok: true, ignored: true, event: eventName, reason: "Payment order not found locally." });
+      return;
+    }
+
+    const activation = await activateLicenseForPaidPayment(payment, {
+      orderId: orderId,
+      paymentId: paymentId,
+      signature: signature,
+      source: "razorpay_webhook"
+    });
+    sendJson(res, 200, {
+      ok: true,
+      event: eventName,
+      alreadyActivated: !!activation.alreadyActivated,
+      licenseId: activation.license && activation.license.id || ""
     });
     return;
   }
@@ -1383,95 +2299,29 @@ async function handleApi(req, res) {
       sendJson(res, 404, { ok: false, error: "Payment order was not found." });
       return;
     }
-    if (payment.status === "paid" && payment.licenseId) {
-      const licenses = payment.companyId ? await store.listLicensesForCompany(payment.companyId) : [];
-      const existingLicense = licenses.find(function (entry) {
-        return entry.id === payment.licenseId;
-      });
+    const activation = await activateLicenseForPaidPayment(payment, {
+      orderId: orderId,
+      paymentId: paymentId,
+      signature: signature,
+      source: "checkout_confirm"
+    });
+    if (activation.alreadyActivated) {
       sendJson(res, 200, {
         ok: true,
         message: "License was already activated for this payment.",
-        license: existingLicense || null
+        license: activation.license || null
       });
       return;
     }
 
-    const company = await ensureCompanyRecord(payment.companyName, payment.purchaserEmail, payment.purchaserPhone);
-    const resolvedPlan = await resolvePlanForRequest(payment.planCode, payment.requestedUsers, company.id);
-    const paymentMetadata = payment.metadata || {};
-    const lockedUserLimit = integerOrDefault(paymentMetadata.userLimit, 0);
-    const effectiveAmountInr = integerOrDefault(payment.amountInr, 0) || resolvedPlan.annualPriceInr;
-    const activatedAt = nowIso();
-    const endsAt = resolvedPlan.licenseType === "source" ? null : addMonthsIso(activatedAt, resolvedPlan.durationMonths);
-
-    const provisionalLicense = {
-      id: createLicenseId(company.name),
-      licenseNumber: createLicenseNumber(),
-      companyId: company.id,
-      planCode: resolvedPlan.planCode,
-      licenseType: resolvedPlan.licenseType,
-      userLimit: resolvedPlan.licenseType === "source" ? SOURCE_LICENSE_USER_LIMIT : (lockedUserLimit > 0 ? lockedUserLimit : resolvedPlan.userLimit),
-      amountInr: effectiveAmountInr,
-      currency: "INR",
-      durationMonths: resolvedPlan.durationMonths,
-      status: "active",
-      paymentStatus: "paid",
-      adminUserId: "",
-      startsAt: activatedAt,
-      endsAt: endsAt,
-      activatedAt: activatedAt,
-      metadata: {
-        paymentGateway: "razorpay",
-        orderId: orderId,
-        paymentId: paymentId
-      }
-    };
-
-    const license = await store.createLicense(provisionalLicense);
-    const adminResult = await ensureCompanyAdminUser(company, {
-      name: payment.purchaserName,
-      email: payment.purchaserEmail,
-      phone: payment.purchaserPhone
-    }, {
-      licenseNumber: license.licenseNumber,
-      planName: resolvedPlan.planName,
-      userLimit: license.userLimit,
-      endsAt: endsAt
-    });
-    const finalizedLicense = await store.updateLicenseAdminUser(license.id, adminResult.user.id) || license;
-
-    await store.markLicensePaymentPaid(payment.id, {
-      companyId: company.id,
-      licenseId: finalizedLicense.id,
-      gatewayPaymentId: paymentId,
-      gatewaySignature: signature,
-      metadata: {
-        adminUserId: adminResult.user.id,
-        emailSent: !!(adminResult.generatedCredentials && adminResult.generatedCredentials.emailSent)
-      }
-    });
-    if (paymentMetadata.inviteId) {
-      await store.markLicenseCheckoutInvitePaid(paymentMetadata.inviteId, {
-        licenseId: finalizedLicense.id,
-        paymentId: paymentId
-      });
-    }
-    await store.updateCompanyActiveLicense(company.id, finalizedLicense.id, "active");
-
     sendJson(res, 200, {
       ok: true,
       message: "Payment verified and license activated successfully.",
-      license: Object.assign({}, finalizedLicense, {
-        adminUserId: adminResult.user.id
+      license: Object.assign({}, activation.license, {
+        adminUserId: activation.adminResult && activation.adminResult.user ? activation.adminResult.user.id : ""
       }),
-      company: company,
-      adminAccount: {
-        email: adminResult.user.email,
-        username: adminResult.user.username || "",
-        emailSent: !!(adminResult.generatedCredentials && adminResult.generatedCredentials.emailSent),
-        temporaryPassword: adminResult.generatedCredentials && !adminResult.generatedCredentials.emailSent ? adminResult.generatedCredentials.password : "",
-        recoveryKey: adminResult.generatedCredentials && !adminResult.generatedCredentials.emailSent ? adminResult.generatedCredentials.recoveryKey : ""
-      }
+      company: activation.company,
+      adminAccount: activation.adminAccount
     });
     return;
   }
@@ -1528,18 +2378,90 @@ async function handleApi(req, res) {
       sendJson(res, 401, { ok: false, error: "Incorrect password." });
       return;
     }
+    if (isOwnerAccount(user)) {
+      sendJson(res, 403, { ok: false, error: "Owner accounts must use Owner Login with email OTP." });
+      return;
+    }
 
     const updatedUser = await store.updateUserLoginById(user.id, nowIso()) || user;
     const token = await createSession(updatedUser);
-    res.setHeader("Set-Cookie", sessionCookie(token));
-    sendJson(res, 200, { ok: true, user: sanitizeUser(updatedUser) });
+    res.setHeader("Set-Cookie", sessionCookie(token, req));
+    sendJson(res, 200, {
+      ok: true,
+      user: sanitizeUser(updatedUser),
+      sessionToken: token
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/auth/owner/request-otp") {
+    const payload = await parseBody(req);
+    const email = normalizeEmail(payload.email);
+    const password = String(payload.password || "");
+
+    if (!email || !password) {
+      sendJson(res, 400, { ok: false, error: "Owner email and password are required before OTP." });
+      return;
+    }
+
+    const user = await store.findUserByEmail(email);
+    if (!user || !isOwnerAccount(user)) {
+      sendJson(res, 404, { ok: false, error: "Owner account not found for this email." });
+      return;
+    }
+    if (!verifyCredential(password, user.password_salt || user.passwordSalt, user.password_hash || user.passwordHash)) {
+      sendJson(res, 401, { ok: false, error: "Incorrect owner password." });
+      return;
+    }
+
+    const challenge = await createOwnerOtpChallenge(user, req);
+    if (!challenge.ok) {
+      sendJson(res, 502, {
+        ok: false,
+        error: "Owner password was verified, but the OTP email could not be sent: " + challenge.error
+      });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      challengeId: challenge.challengeId,
+      expiresAt: challenge.expiresAt,
+      email: challenge.email,
+      message: "Owner OTP sent to " + challenge.email + "."
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/auth/owner/verify-otp") {
+    const payload = await parseBody(req);
+    const verification = await verifyOwnerOtpChallenge({
+      challengeId: payload.challengeId,
+      email: payload.email,
+      otp: payload.otp
+    });
+
+    if (!verification.ok) {
+      sendJson(res, verification.status || 401, { ok: false, error: verification.error });
+      return;
+    }
+
+    const updatedUser = await store.updateUserLoginById(verification.user.id, nowIso()) || verification.user;
+    const token = await createSession(updatedUser);
+    res.setHeader("Set-Cookie", sessionCookie(token, req));
+    sendJson(res, 200, {
+      ok: true,
+      user: sanitizeUser(updatedUser),
+      sessionToken: token
+    });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/auth/logout") {
     const cookies = parseCookies(req);
-    await store.deleteSession(cookies[SESSION_COOKIE]);
-    res.setHeader("Set-Cookie", clearSessionCookie());
+    const token = cookies[SESSION_COOKIE] || headerSessionToken(req);
+    await store.deleteSession(token);
+    res.setHeader("Set-Cookie", clearSessionCookie(req));
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -1633,7 +2555,7 @@ async function handleApi(req, res) {
   }
 
   if (pathname.indexOf("/api/projects") === 0) {
-    const session = await requireAuth(req, res);
+    const session = await requireDesignWorkspaceUser(req, res);
     if (!session) {
       return;
     }
@@ -1698,7 +2620,7 @@ async function handleApi(req, res) {
   }
 
   if (pathname.indexOf("/api/energy") === 0) {
-    const session = await requireAuth(req, res);
+    const session = await requireDesignWorkspaceUser(req, res);
     if (!session) {
       return;
     }
@@ -1722,6 +2644,185 @@ async function handleApi(req, res) {
       }, result));
       return;
     }
+  }
+
+  if (pathname.indexOf("/api/ai") === 0) {
+    const session = await requireDesignWorkspaceUser(req, res);
+    if (!session) {
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/ai/design-advisor") {
+      const payload = await parseBody(req);
+      const fallbackAdvisor = buildTrustedLocalAdvisor(payload || {});
+
+      try {
+        const advisor = await generateOpenAiDesignAdvisor(payload || {});
+        sendJson(res, 200, {
+          ok: true,
+          provider: advisor && advisor.provider ? advisor.provider : fallbackAdvisor.provider || "local_rules",
+          advisor: advisor || fallbackAdvisor,
+          generatedAt: nowIso()
+        });
+      } catch (error) {
+        sendJson(res, 502, {
+          ok: false,
+          error: error && error.message ? error.message : "AI design advisor request failed.",
+          fallbackAdvisor: fallbackAdvisor
+        });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/ai/design-alternatives") {
+      const payload = await parseBody(req);
+      const fallbackAlternatives = buildTrustedLocalAlternatives(payload || {});
+
+      try {
+        const alternatives = await generateOpenAiDesignAlternatives(payload || {});
+        sendJson(res, 200, {
+          ok: true,
+          provider: alternatives && alternatives.provider ? alternatives.provider : fallbackAlternatives.provider || "local_rules",
+          alternatives: alternatives || fallbackAlternatives,
+          generatedAt: nowIso()
+        });
+      } catch (error) {
+        sendJson(res, 502, {
+          ok: false,
+          error: error && error.message ? error.message : "AI design alternatives request failed.",
+          fallbackAlternatives: fallbackAlternatives
+        });
+      }
+      return;
+    }
+
+    // ---------------------------------------------------------------------
+    // /api/ai/design  — full sized design from project context.
+    // The engine of truth is engine/ashrae/designer.js. AI is optional and
+    // is only used to NARRATE the result; the numbers come from the engine.
+    // ---------------------------------------------------------------------
+    if (req.method === "POST" && pathname === "/api/ai/design") {
+      const payload = await parseBody(req) || {};
+      try {
+        const design = designer.designProject(payload.project || payload || {});
+        let narrative = null;
+        if (cleanText(process.env.OPENAI_API_KEY)) {
+          try { narrative = await narrateDesign(design); } catch (_) { narrative = null; }
+        }
+        sendJson(res, 200, {
+          ok: true,
+          provider: narrative ? "openai+ashrae" : "ashrae",
+          engineVersion: ashrae.version,
+          design: design,
+          narrative: narrative,
+          generatedAt: nowIso()
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error && error.message ? error.message : "Design generation failed."
+        });
+      }
+      return;
+    }
+
+    // ---------------------------------------------------------------------
+    // /api/ai/design-variants  — 3 ranked, fully sized alternatives.
+    // ---------------------------------------------------------------------
+    if (req.method === "POST" && pathname === "/api/ai/design-variants") {
+      const payload = await parseBody(req) || {};
+      try {
+        const alternatives = designer.designAlternatives(payload.project || payload || {});
+        sendJson(res, 200, {
+          ok: true,
+          provider: "ashrae",
+          engineVersion: ashrae.version,
+          alternatives: alternatives,
+          generatedAt: nowIso()
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error && error.message ? error.message : "Alternative generation failed."
+        });
+      }
+      return;
+    }
+
+    // ---------------------------------------------------------------------
+    // /api/ai/design-autofix  — iteratively mutates intent until design
+    // satisfies constraints (fan W/cfm, max oversize). Returns the final
+    // design + a transcript of what was changed and why.
+    // ---------------------------------------------------------------------
+    if (req.method === "POST" && pathname === "/api/ai/design-autofix") {
+      const payload = await parseBody(req) || {};
+      try {
+        const result = designer.autoFix(payload.project || {}, payload.constraints || {});
+        sendJson(res, 200, {
+          ok: true,
+          provider: "ashrae",
+          engineVersion: ashrae.version,
+          success: result.success,
+          iterations: result.iterations,
+          design: result.design,
+          log: result.log,
+          generatedAt: nowIso()
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error && error.message ? error.message : "Auto-fix failed."
+        });
+      }
+      return;
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/owner/integrations") {
+    const session = await requireOwner(req, res);
+    if (!session) {
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      email: EmailService.diagnostics(),
+      razorpay: razorpayDiagnostics(),
+      webhookUrl: appBaseUrl(req).replace(/\/+$/, "") + "/api/licensing/razorpay-webhook"
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/owner/test-email") {
+    const session = await requireOwner(req, res);
+    if (!session) {
+      return;
+    }
+    const payload = await parseBody(req);
+    const to = normalizeEmail(payload.to || session.user.email);
+    if (!to) {
+      sendJson(res, 400, { ok: false, error: "Recipient email is required." });
+      return;
+    }
+    const verifyResult = await EmailService.verifyConfiguration();
+    if (!verifyResult.ok) {
+      sendJson(res, 400, { ok: false, error: verifyResult.error || "SMTP verification failed.", diagnostics: EmailService.diagnostics() });
+      return;
+    }
+    const sendResult = await EmailService.sendEmail({
+      to: to,
+      subject: "Musk-IT HVAC SMTP test",
+      html: renderEmailLayout({
+        preheader: "SMTP delivery test from the HVAC platform.",
+        kicker: "SMTP Test",
+        title: "Email Delivery Is Active",
+        summary: "This message confirms the configured SMTP provider can send platform emails.",
+        bodyHtml: "<p style=\"margin:0;font-family:Arial,sans-serif;font-size:15px;line-height:1.75;color:#334155;\">GoDaddy SMTP is connected and this server can send account, password reset, pricing, and license activation emails.</p>",
+        footer: "This is a delivery test generated from the owner integration diagnostics route."
+      }),
+      text: "Musk-IT HVAC SMTP test. Email delivery is active."
+    });
+    sendJson(res, sendResult.ok ? 200 : 400, Object.assign({ ok: !!sendResult.ok, diagnostics: EmailService.diagnostics() }, sendResult));
+    return;
   }
 
   if (req.method === "GET" && pathname === "/api/company/overview") {
@@ -1970,6 +3071,42 @@ async function handleApi(req, res) {
     const projectRows = await store.listProjects();
     const plans = await store.listLicensingPlans();
     const pricingOverrides = await store.listCompanyPricingOverrides();
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const sevenDayStart = new Date(Date.now() - (1000 * 60 * 60 * 24 * 7));
+    const activeTodayUsers = users.filter(function (user) {
+      const lastLogin = user.last_login_at || user.lastLoginAt;
+      return lastLogin && new Date(lastLogin).getTime() >= dayStart.getTime();
+    });
+    const active7DayUsers = users.filter(function (user) {
+      const lastLogin = user.last_login_at || user.lastLoginAt;
+      return lastLogin && new Date(lastLogin).getTime() >= sevenDayStart.getTime();
+    });
+    const activeTodayCompanyIds = new Set(activeTodayUsers.map(function (user) {
+      return cleanText(user.company_id || user.companyId);
+    }).filter(Boolean));
+    const dauTrend = Array.from({ length: 7 }).map(function (_, index) {
+      const date = new Date(dayStart.getTime() - ((6 - index) * 1000 * 60 * 60 * 24));
+      const dateKey = date.toISOString().slice(0, 10);
+      const dayUsers = users.filter(function (user) {
+        const lastLogin = user.last_login_at || user.lastLoginAt;
+        return lastLogin && new Date(lastLogin).toISOString().slice(0, 10) === dateKey;
+      });
+      const companyIds = new Set(dayUsers.map(function (user) {
+        return cleanText(user.company_id || user.companyId);
+      }).filter(Boolean));
+      return {
+        date: dateKey,
+        activeUserCount: dayUsers.length,
+        activeCompanyCount: companyIds.size,
+        adminActiveCount: dayUsers.filter(function (user) { return isCompanyAdmin(user); }).length,
+        regularActiveCount: dayUsers.filter(function (user) { return !isOwner(user) && !isCompanyAdmin(user); }).length
+      };
+    });
+    const companyNameById = companies.reduce(function (lookup, company) {
+      lookup[company.id] = company.name;
+      return lookup;
+    }, {});
 
     const totals = {
       companyCount: companies.length,
@@ -1990,8 +3127,30 @@ async function handleApi(req, res) {
       totals: totals,
       companies: companies,
       leads: leads,
+      users: users.map(function (user) {
+        const sanitized = sanitizeUser(user);
+        return Object.assign({}, sanitized, {
+          companyId: user.company_id || user.companyId || sanitized.companyId || "",
+          companyName: user.company || companyNameById[user.company_id] || sanitized.company || "",
+          lastLoginAt: toIso(user.last_login_at || user.lastLoginAt)
+        });
+      }),
+      dailyActive: {
+        date: dayStart.toISOString().slice(0, 10),
+        activeUserCount: activeTodayUsers.length,
+        active7DayUserCount: active7DayUsers.length,
+        activeCompanyCount: activeTodayCompanyIds.size,
+        ownerActiveCount: activeTodayUsers.filter(function (user) { return isOwner(user); }).length,
+        adminActiveCount: activeTodayUsers.filter(function (user) { return isCompanyAdmin(user); }).length,
+        regularActiveCount: activeTodayUsers.filter(function (user) { return !isOwner(user) && !isCompanyAdmin(user); }).length,
+        trend: dauTrend
+      },
       plans: plans,
-      pricingOverrides: pricingOverrides
+      pricingOverrides: pricingOverrides.map(function (override) {
+        return Object.assign({}, override, {
+          companyName: companyNameById[override.companyId] || ""
+        });
+      })
     });
     return;
   }
@@ -2176,7 +3335,19 @@ process.on("SIGTERM", function () {
   shutdown("SIGTERM");
 });
 
-startServer().catch(function (error) {
-  console.error("Failed to start Musk-IT HVAC platform:", error.message || error);
-  process.exit(1);
-});
+if (require.main === module) {
+  startServer().catch(function (error) {
+    console.error("Failed to start Musk-IT HVAC platform:", error.message || error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  sanitizeAdvisorPayload: sanitizeAdvisorPayload,
+  sanitizeAlternativesPayload: sanitizeAlternativesPayload,
+  buildTrustedLocalAdvisor: buildTrustedLocalAdvisor,
+  buildTrustedLocalAlternatives: buildTrustedLocalAlternatives,
+  reconcileAdvisorWithEngineering: reconcileAdvisorWithEngineering,
+  reconcileAlternativesWithEngineering: reconcileAlternativesWithEngineering,
+  designValidationFromPayload: designValidationFromPayload
+};

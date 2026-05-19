@@ -3,8 +3,44 @@ require("./envLoader");
 function getProviderName() {
   return String(
     process.env.MAIL_PROVIDER
-    || (process.env.EMAIL_HOST ? "smtp" : "resend")
+    || (process.env.EMAIL_HOST || process.env.SMTP_HOST || process.env.GODADDY_SMTP_HOST ? "smtp" : "resend")
   ).trim().toLowerCase();
+}
+
+function envText(keys) {
+  for (const key of keys) {
+    const value = String(process.env[key] || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function envSecret(keys) {
+  for (const key of keys) {
+    const value = String(process.env[key] || "");
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function envBool(keys, fallback) {
+  for (const key of keys) {
+    const raw = String(process.env[key] || "").trim().toLowerCase();
+    if (!raw) {
+      continue;
+    }
+    if (["1", "true", "yes", "on"].includes(raw)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(raw)) {
+      return false;
+    }
+  }
+  return !!fallback;
 }
 
 function getProviderConfig() {
@@ -19,15 +55,23 @@ function getProviderConfig() {
   }
 
   if (provider === "smtp") {
+    const host = envText(["EMAIL_HOST", "SMTP_HOST", "GODADDY_SMTP_HOST"]) || "smtpout.secureserver.net";
+    const port = parseInt(envText(["EMAIL_PORT", "SMTP_PORT", "GODADDY_SMTP_PORT"]) || "587", 10);
+    const user = envText(["EMAIL_USER", "SMTP_USER", "GODADDY_SMTP_USER"]);
+    const from = envText(["MAIL_FROM", "EMAIL_FROM", "SMTP_FROM", "GODADDY_SMTP_FROM"]) || user;
     return {
       provider: "smtp",
-      host: String(process.env.EMAIL_HOST || "").trim(),
-      port: parseInt(process.env.EMAIL_PORT || "587", 10),
-      secure: ["1", "true", "yes", "on"].includes(String(process.env.EMAIL_SECURE || "").toLowerCase()) || String(process.env.EMAIL_PORT || "") === "465",
-      user: String(process.env.EMAIL_USER || process.env.SMTP_USER || "").trim(),
-      pass: String(process.env.EMAIL_PASS || process.env.SMTP_PASS || ""),
-      from: String(process.env.MAIL_FROM || process.env.EMAIL_FROM || "").trim(),
-      replyTo: String(process.env.MAIL_REPLY_TO || process.env.EMAIL_REPLY_TO || "").trim()
+      host: host,
+      port: Number.isFinite(port) ? port : 587,
+      secure: envBool(["EMAIL_SECURE", "SMTP_SECURE", "GODADDY_SMTP_SECURE"], String(port) === "465"),
+      requireAuth: !envBool(["SMTP_ALLOW_NO_AUTH"], false),
+      user: user,
+      pass: envSecret(["EMAIL_PASS", "SMTP_PASS", "GODADDY_SMTP_PASS"]),
+      from: from,
+      replyTo: envText(["MAIL_REPLY_TO", "EMAIL_REPLY_TO", "SMTP_REPLY_TO", "GODADDY_SMTP_REPLY_TO"]),
+      connectionTimeout: parseInt(envText(["SMTP_CONNECTION_TIMEOUT_MS"]) || "12000", 10),
+      greetingTimeout: parseInt(envText(["SMTP_GREETING_TIMEOUT_MS"]) || "12000", 10),
+      socketTimeout: parseInt(envText(["SMTP_SOCKET_TIMEOUT_MS"]) || "20000", 10)
     };
   }
 
@@ -45,9 +89,31 @@ function isConfigured() {
     return !!(config.apiKey && config.from);
   }
   if (config.provider === "smtp") {
-    return !!(config.host && config.port && config.from);
+    return !!(config.host && config.port && config.from && (!config.requireAuth || (config.user && config.pass)));
   }
   return false;
+}
+
+function diagnostics() {
+  const config = getProviderConfig();
+  if (config.provider === "smtp") {
+    return {
+      provider: config.provider,
+      configured: isConfigured(),
+      host: config.host,
+      port: config.port,
+      secure: !!config.secure,
+      authConfigured: !!(config.user && config.pass),
+      from: config.from,
+      replyTo: config.replyTo || ""
+    };
+  }
+  return {
+    provider: config.provider,
+    configured: isConfigured(),
+    from: config.from || "",
+    replyTo: config.replyTo || ""
+  };
 }
 
 async function sendWithResend(message, config) {
@@ -109,7 +175,7 @@ async function sendWithSmtp(message, config) {
     };
   }
 
-  if (!(config.host && config.port && config.from)) {
+  if (!(config.host && config.port && config.from && (!config.requireAuth || (config.user && config.pass)))) {
     return {
       ok: false,
       skipped: true,
@@ -125,7 +191,15 @@ async function sendWithSmtp(message, config) {
     auth: config.user ? {
       user: config.user,
       pass: config.pass || ""
-    } : undefined
+    } : undefined,
+    requireTLS: !config.secure,
+    connectionTimeout: config.connectionTimeout,
+    greetingTimeout: config.greetingTimeout,
+    socketTimeout: config.socketTimeout,
+    tls: {
+      servername: config.host,
+      minVersion: "TLSv1.2"
+    }
   });
 
   try {
@@ -151,6 +225,76 @@ async function sendWithSmtp(message, config) {
   }
 }
 
+async function verifyConfiguration() {
+  const config = getProviderConfig();
+  if (config.provider !== "smtp") {
+    return {
+      ok: isConfigured(),
+      provider: config.provider,
+      skipped: true,
+      error: isConfigured() ? "" : "Email provider is not configured."
+    };
+  }
+
+  let nodemailer;
+  try {
+    nodemailer = require("nodemailer");
+  } catch (error) {
+    return {
+      ok: false,
+      provider: config.provider,
+      error: "SMTP support requires the nodemailer package."
+    };
+  }
+
+  if (!isConfigured()) {
+    return {
+      ok: false,
+      provider: config.provider,
+      error: "SMTP provider is not fully configured."
+    };
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: !!config.secure,
+    auth: config.user ? {
+      user: config.user,
+      pass: config.pass || ""
+    } : undefined,
+    requireTLS: !config.secure,
+    connectionTimeout: config.connectionTimeout,
+    greetingTimeout: config.greetingTimeout,
+    socketTimeout: config.socketTimeout,
+    tls: {
+      servername: config.host,
+      minVersion: "TLSv1.2"
+    }
+  });
+
+  try {
+    await transporter.verify();
+    return {
+      ok: true,
+      provider: config.provider,
+      host: config.host,
+      port: config.port,
+      secure: !!config.secure,
+      from: config.from
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      provider: config.provider,
+      host: config.host,
+      port: config.port,
+      secure: !!config.secure,
+      error: error && error.message ? error.message : "SMTP verification failed."
+    };
+  }
+}
+
 async function sendEmail(message) {
   const config = getProviderConfig();
   if (config.provider === "resend") {
@@ -169,6 +313,9 @@ async function sendEmail(message) {
 }
 
 module.exports = {
+  diagnostics,
+  getProviderConfig,
   isConfigured,
+  verifyConfiguration,
   sendEmail
 };
