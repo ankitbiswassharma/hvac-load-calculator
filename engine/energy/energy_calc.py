@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 from .bin_data import TemperatureBin, normalize_bins
 from .equipment_model import EquipmentDesign, calc_equipment_power, calc_process_fan_energy
@@ -33,18 +33,25 @@ class EnergySimulationInput:
     min_ahu_airflow_ratio: float = 0.30
     chiller_cop_full_load: float = 3.5
     chiller_cop_half_load: float = 5.0
+    chiller_cop_rated: Optional[float] = None
+    is_air_cooled: bool = True
+    rated_outdoor_c: float = 35.0
+    cop_kt_per_k: Optional[float] = None
     process_fan_efficiency: float = 0.62
     process_motor_efficiency: float = 0.92
     option_name: str = "Base Option"
 
     def conditioned_equipment(self) -> EquipmentDesign:
+        rated_cop = self.chiller_cop_rated if self.chiller_cop_rated is not None else self.chiller_cop_full_load
         return EquipmentDesign(
             peak_cooling_kw=self.peak_load_kw,
             design_conditioned_airflow_cfm=self.conditioned_airflow_cfm,
             peak_conditioned_fan_kw=self.peak_conditioned_fan_kw,
             min_ahu_airflow_ratio=self.min_ahu_airflow_ratio,
-            chiller_cop_full_load=self.chiller_cop_full_load,
-            chiller_cop_half_load=self.chiller_cop_half_load,
+            chiller_cop_rated=rated_cop,
+            is_air_cooled=self.is_air_cooled,
+            rated_outdoor_c=self.rated_outdoor_c,
+            cop_kt_per_k=self.cop_kt_per_k,
         )
 
     @property
@@ -60,15 +67,15 @@ class EnergySimulationInput:
 def _build_warnings(sim_input: EnergySimulationInput, annual_process_energy: float, annual_total_energy: float) -> List[str]:
     warnings: List[str] = []
     if sim_input.process_airflow_cfm > sim_input.conditioned_airflow_cfm * 5.0:
-        warnings.append("Process air exceeds 5x conditioned cooling airflow; ventilation/process strategy dominates system energy.")
+        warnings.append("Ventilation / make-up airflow exceeds 5x recirculation airflow; the non-cooling air system dominates energy.")
 
     if sim_input.peak_tr > 0:
         conditioned_fan_kw_per_tr = sim_input.peak_conditioned_fan_kw / sim_input.peak_tr
         if conditioned_fan_kw_per_tr > 1.15:
-            warnings.append("Conditioned fan specific power exceeds 1.15 kW/TR; review SFP, static pressure, and fan tuning.")
+            warnings.append("Recirculation fan specific power exceeds 1.15 kW/TR; review SFP, static pressure, and fan tuning.")
 
     if annual_total_energy > 0 and annual_process_energy / annual_total_energy > 0.45:
-        warnings.append("Process air energy is a major annual driver; consider heat recovery, staging, or production-linked fan control.")
+        warnings.append("Ventilation / make-up fan energy is a major annual driver; consider heat recovery, staging, or production-linked fan control.")
 
     return warnings
 
@@ -114,6 +121,7 @@ def calculate_annual_energy(
             load_ratio=load_ratio,
             airflow=requested_conditioned_airflow_cfm,
             design=design,
+            outdoor_temp_c=temp_bin.dry_bulb_c,
         )
 
         cooling_energy_kwh = equipment["chiller_power_kw"] * temp_bin.hours
@@ -133,6 +141,9 @@ def calculate_annual_energy(
                 "bin_hours": temp_bin.hours,
                 "load_ratio": load_ratio,
                 "bin_load_kw": bin_load_kw,
+                "cop": equipment["cop"],
+                "effective_cop": equipment["effective_cop"],
+                "cycling_factor": equipment["cycling_factor"],
                 "cooling_power_kw": equipment["chiller_power_kw"],
                 "conditioned_fan_power_kw": equipment["fan_power_kw"],
                 "process_fan_power_kw": process_fan_power_kw,
@@ -142,7 +153,8 @@ def calculate_annual_energy(
         )
 
     annual_total_energy = annual_cooling_energy + annual_conditioned_fan_energy + annual_process_energy
-    system_efficiency_kw_per_tr = peak_power_kw / system_data.peak_tr if system_data.peak_tr > 0 else 0.0
+    peak_kw_per_tr = peak_power_kw / system_data.peak_tr if system_data.peak_tr > 0 else 0.0
+    annual_kwh_per_tr_year = annual_total_energy / system_data.peak_tr if system_data.peak_tr > 0 else 0.0
     warnings = _build_warnings(
         sim_input=system_data,
         annual_process_energy=annual_process_energy,
@@ -157,7 +169,14 @@ def calculate_annual_energy(
         "process_energy": annual_process_energy,
         "peak_power_kw": peak_power_kw,
         "energy_cost": annual_total_energy * max(system_data.tariff_per_kwh, 0.0),
-        "system_efficiency": system_efficiency_kw_per_tr,
+        "system_efficiency": peak_kw_per_tr,
+        "peak_kw_per_tr": peak_kw_per_tr,
+        "annual_kwh_per_tr_year": annual_kwh_per_tr_year,
+        "metric_definitions": {
+            "peak_kw_per_tr": "peak electric input kW divided by design cooling TR",
+            "annual_kwh_per_tr_year": "annual electric energy kWh divided by design cooling TR",
+            "cop": "cooling output kW divided by electric input kW for each operating bin",
+        },
         "peak_tr": system_data.peak_tr,
         "process_to_conditioned_air_ratio": (
             system_data.process_airflow_cfm / system_data.conditioned_airflow_cfm
