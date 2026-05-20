@@ -8,7 +8,7 @@
 # Logs:      docker compose logs -f app
 #
 # Hostinger VPS KVM 2 sizing baseline: 2 vCPU, 8 GB RAM, 100 GB NVMe.
-# Limits below leave headroom for nginx and the OS.
+# Limits below leave headroom for Traefik and the OS.
 
 services:
   db:
@@ -59,7 +59,7 @@ services:
       PORT: 3000
       # Production base URL — used for absolute links in emails / OAuth callbacks
       APP_BASE_URL: ${APP_BASE_URL:-https://hvac.muskit.in}
-      # Cookies must be Secure behind Nginx TLS (X-Forwarded-Proto promotes
+      # Cookies must be Secure behind Traefik TLS (X-Forwarded-Proto promotes
       # automatically, but pin it explicitly here so a misconfigured proxy
       # cannot silently downgrade them).
       SESSION_COOKIE_SECURE: "1"
@@ -67,7 +67,7 @@ services:
       # Node memory ceiling (~1.5 GB heap for the app — leaves DB + OS room)
       NODE_OPTIONS: "--max-old-space-size=1536"
     ports:
-      # Bind only to loopback so only nginx-on-host can reach it
+      # Bind only to loopback; public traffic should enter through Traefik.
       - "127.0.0.1:3000:3000"
     volumes:
       - appdata:/app/server-data

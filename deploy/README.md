@@ -77,6 +77,19 @@ non-root sudo user, create one before running the script.
 The current Hostinger server already answers with Traefik, so this is the
 path that fixes the live `TRAEFIK DEFAULT CERT` / `404` symptom.
 
+Fast path:
+
+```bash
+cd /opt/hvac
+bash deploy/apply-traefik-server-settings.sh
+```
+
+The script forces the app server settings to `https://hvac.muskit.in`, pulls
+the latest repo, rebuilds the HVAC app, connects it to the existing Traefik
+network, installs `deploy/traefik/dynamic/hvac.yml`, and restarts Traefik.
+
+Manual path:
+
 1. Start the HVAC app stack without another public proxy:
 
 ```bash
