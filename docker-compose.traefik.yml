@@ -1,0 +1,43 @@
+# Traefik edge overlay for hvac.muskit.in.
+#
+# Use this with the base stack when this repository owns the public edge:
+#   docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
+#
+# If another Traefik stack already owns ports 80/443 on the VPS, do not start
+# this Traefik service. Instead copy deploy/traefik/dynamic/hvac.yml into that
+# Traefik file-provider directory and attach hvac-app to the same Docker network.
+
+services:
+  app:
+    expose:
+      - "3000"
+
+  traefik:
+    image: traefik:v3.1
+    container_name: hvac-traefik
+    restart: unless-stopped
+    depends_on:
+      - app
+    command:
+      - "--api.dashboard=false"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_CERT_EMAIL:?Set TRAEFIK_CERT_EMAIL in .env}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik_letsencrypt:/letsencrypt
+
+volumes:
+  traefik_letsencrypt:

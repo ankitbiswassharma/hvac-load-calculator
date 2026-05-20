@@ -1,4 +1,4 @@
-# Production-style stack for hvac.muskit.in
+# Production-style stack for hvac.muskit.in on Hostinger VPS (KVM 2).
 #
 #   app  — Node 20 server (the HVAC platform)
 #   db   — Postgres 16 for persistent project / user storage
@@ -7,33 +7,47 @@
 # Stop:      docker compose down
 # Logs:      docker compose logs -f app
 #
-# Required .env keys:
-#   POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
-#   DATABASE_URL  (e.g. postgres://hvac:hvac@db:5432/hvac)
-#   OPENAI_API_KEY (optional)
-#   SMTP_*         (optional)
+# Hostinger VPS KVM 2 sizing baseline: 2 vCPU, 8 GB RAM, 100 GB NVMe.
+# Limits below leave headroom for nginx and the OS.
 
 services:
   db:
     image: postgres:16-alpine
+    container_name: hvac-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-hvac}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hvac}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: ${POSTGRES_DB:-hvac}
+      # Keep WAL retention modest on a small VPS
+      POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hvac} -d ${POSTGRES_DB:-hvac}"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 1500M
+        reservations:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   app:
     build:
       context: .
       dockerfile: Dockerfile
+    image: hvac-muskit:local
+    container_name: hvac-app
     restart: unless-stopped
     depends_on:
       db:
@@ -43,11 +57,32 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL:-postgres://hvac:hvac@db:5432/hvac}
+      # Production base URL — used for absolute links in emails / OAuth callbacks
+      APP_BASE_URL: ${APP_BASE_URL:-https://hvac.muskit.in}
+      # Cookies must be Secure behind Nginx TLS (X-Forwarded-Proto promotes
+      # automatically, but pin it explicitly here so a misconfigured proxy
+      # cannot silently downgrade them).
+      SESSION_COOKIE_SECURE: "1"
+      DATABASE_URL: ${DATABASE_URL:-postgres://hvac:changeme@db:5432/hvac}
+      # Node memory ceiling (~1.5 GB heap for the app — leaves DB + OS room)
+      NODE_OPTIONS: "--max-old-space-size=1536"
     ports:
+      # Bind only to loopback so only nginx-on-host can reach it
       - "127.0.0.1:3000:3000"
     volumes:
       - appdata:/app/server-data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.25"
+          memory: 2200M
+        reservations:
+          memory: 384M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 volumes:
   pgdata:

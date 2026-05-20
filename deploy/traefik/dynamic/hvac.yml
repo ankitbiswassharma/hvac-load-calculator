@@ -1,0 +1,15 @@
+http:
+  routers:
+    hvac-platform:
+      rule: "Host(`hvac.muskit.in`)"
+      entryPoints:
+        - websecure
+      service: hvac-platform
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    hvac-platform:
+      loadBalancer:
+        servers:
+          - url: "http://hvac-app:3000"
