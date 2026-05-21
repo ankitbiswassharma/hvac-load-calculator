@@ -26,7 +26,12 @@
     walking: { sensible: 90, latent: 75 }
   };
   const CLTD_WALL = { 1: 15, 2: 18, 3: 21, 4: 24 };
-  const CLTD_ROOF_MAP = { top_floor: 28, middle: 0, ground: 0 };
+  // ASHRAE 1989 HOF Table 30, Roof No. 7 (medium-mass concrete + insulation,
+  // dark surface) at 16:00 solar time, latitude ~20°N: peak CLTD ≈ 40 °C.
+  // The previous default of 28 °C was a non-tropical office-building value
+  // and under-predicted exposed-roof load by roughly 40 % in Indian climates.
+  // Middle/ground floor rooms see no direct roof gain.
+  const CLTD_ROOF_MAP = { top_floor: 40, middle: 0, ground: 0 };
   const FRICTION_RATE = 1.0; // Pa/m for equal-friction baseline; converted explicitly at use sites.
   const EQUIP_PRESSURE = {
     filter_clean: 75,
@@ -200,15 +205,17 @@
     NW: "North-West"
   };
   const DEFAULT_WALL_ORIENTATIONS = ["S", "E", "N", "W", "SE", "SW", "NE", "NW"];
+  // Wall orientation is ALREADY captured inside correctedCltd (the solar
+  // correction term scales with orientationFactor passed in), and the
+  // base CLTD table is itself orientation-specific. Applying these
+  // factors a second time as an outer multiplier on U·A·CLTD double-counts
+  // orientation — north walls were reduced twice, west walls inflated by
+  // 10–14 %. All entries are now 1.0 (no-op) so only the in-CLTD
+  // orientation effect remains. Variable kept so external references
+  // continue to resolve.
   const WALL_ORIENTATION_FACTORS = {
-    N: 0.90,
-    NE: 0.98,
-    E: 1.10,
-    SE: 1.14,
-    S: 1.04,
-    SW: 1.14,
-    W: 1.10,
-    NW: 0.98
+    N: 1.00, NE: 1.00, E: 1.00, SE: 1.00,
+    S: 1.00, SW: 1.00, W: 1.00, NW: 1.00
   };
   const ASHRAE_OFFICE_RP_CFM_PER_PERSON = 5.0;
   const ASHRAE_OFFICE_RA_CFM_PER_SQFT = 0.06;
@@ -6107,7 +6114,32 @@
       + espRowMarkup("Filter section", "1 ea", EQUIP_PRESSURE.filter_clean, EQUIP_PRESSURE.filter_clean, "EQUIP")
       + espRowMarkup("Mixing box and terminals", "1 set", formatInt(result.equipment_loss - EQUIP_PRESSURE.cooling_coil - EQUIP_PRESSURE.filter_clean), formatInt(result.equipment_loss - EQUIP_PRESSURE.cooling_coil - EQUIP_PRESSURE.filter_clean), "EQUIP")
       + '<div class="esp-row esp-total-row"><div class="esp-cell"><b>TOTAL ESP</b></div><div class="esp-cell">-</div><div class="esp-cell">-</div><div class="esp-cell num"><b>' + formatInt(result.total_esp) + ' Pa</b></div><div class="esp-cell" style="color:var(--accent3);font-size:10px;font-family:var(--mono);">' + formatNumber(result.total_esp / 249.09, 2) + " in.w.g.</div></div>"
-      + '<div class="report-inline-note" style="margin-top:10px;">Duct diagnostic: ' + escapeHtml(diagnostics.explanation || "Duct diagnostics unavailable.") + ' Friction rate ' + formatNumber(diagnostics.frictionRatePaM || 0, 2) + ' Pa/m, velocity pressure ' + formatNumber(diagnostics.velocityPressurePa || 0, 1) + ' Pa, hydraulic diameter ' + formatNumber(diagnostics.hydraulicDiameterM || 0, 3) + ' m, equivalent diameter ' + formatNumber(diagnostics.equivalentDiameterM || 0, 3) + ' m, Re ' + formatInt(diagnostics.reynolds || 0) + ', f ' + formatNumber(diagnostics.frictionFactor || 0, 4) + '. Shares: duct ' + formatNumber(diagnostics.ductSharePercent || 0, 1) + '%, fitting ' + formatNumber(diagnostics.fittingSharePercent || 0, 1) + '%, equipment ' + formatNumber(diagnostics.equipmentSharePercent || 0, 1) + '%.</div>';
+      // Compute the share percentages from the SAME numbers shown in the
+      // ESP table above. The duct-diagnostics object recomputes friction
+      // from per-trunk straight-pipe assumptions and can disagree with the
+      // ESP table (this caused the "fitting 791%" bug in earlier reports).
+      + (function () {
+          const ductPa = Math.max(0, Number(result.duct_friction) || 0);
+          const fitPa  = Math.max(0, Number(result.fitting_loss) || 0);
+          const eqPa   = Math.max(0, Number(result.equipment_loss) || 0);
+          const totalPa = Math.max(1, ductPa + fitPa + eqPa);
+          const dPct = (ductPa / totalPa) * 100;
+          const fPct = (fitPa  / totalPa) * 100;
+          const ePct = (eqPa   / totalPa) * 100;
+          return '<div class="report-inline-note" style="margin-top:10px;">'
+            + 'Duct diagnostic: ' + escapeHtml(diagnostics.explanation || "Duct diagnostics unavailable.")
+            + ' Friction rate ' + formatNumber(diagnostics.frictionRatePaM || 0, 2) + ' Pa/m, '
+            + 'velocity pressure ' + formatNumber(diagnostics.velocityPressurePa || 0, 1) + ' Pa, '
+            + 'hydraulic diameter ' + formatNumber(diagnostics.hydraulicDiameterM || 0, 3) + ' m, '
+            + 'equivalent diameter ' + formatNumber(diagnostics.equivalentDiameterM || 0, 3) + ' m, '
+            + 'Re ' + formatInt(diagnostics.reynolds || 0) + ', '
+            + 'f ' + formatNumber(diagnostics.frictionFactor || 0, 4) + '. '
+            + 'Shares (of total ESP shown): '
+            + 'duct ' + formatNumber(dPct, 1) + '%, '
+            + 'fitting ' + formatNumber(fPct, 1) + '%, '
+            + 'equipment ' + formatNumber(ePct, 1) + '%.'
+            + '</div>';
+        })();
   }
 
   function designAdvisorSeverityColor(severity) {

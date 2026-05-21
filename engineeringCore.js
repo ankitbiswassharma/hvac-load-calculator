@@ -570,9 +570,17 @@
       ductFrictionPa: roundTo(ductFrictionPa, 2),
       fittingLossPa: roundTo(fittingLossPa, 2),
       equipmentLossPa: roundTo(equipmentLossPa, 2),
-      ductSharePercent: roundTo(totalEspPa > 0 ? ductFrictionPa / totalEspPa * 100 : 0, 1),
-      fittingSharePercent: roundTo(totalEspPa > 0 ? fittingLossPa / totalEspPa * 100 : 0, 1),
-      equipmentSharePercent: roundTo(totalEspPa > 0 ? equipmentLossPa / totalEspPa * 100 : 0, 1),
+      // Shares are normalized against the *sum of the three components*,
+      // not against an externally supplied totalEspPa value that may have
+      // been computed from a different airflow path. This prevents the
+      // sum from exceeding 100% when the diagnostic re-derives friction
+      // with per-trunk straight-pipe assumptions.
+      ductSharePercent: roundTo(((ductFrictionPa + fittingLossPa + equipmentLossPa) > 0
+        ? ductFrictionPa / (ductFrictionPa + fittingLossPa + equipmentLossPa) * 100 : 0), 1),
+      fittingSharePercent: roundTo(((ductFrictionPa + fittingLossPa + equipmentLossPa) > 0
+        ? fittingLossPa / (ductFrictionPa + fittingLossPa + equipmentLossPa) * 100 : 0), 1),
+      equipmentSharePercent: roundTo(((ductFrictionPa + fittingLossPa + equipmentLossPa) > 0
+        ? equipmentLossPa / (ductFrictionPa + fittingLossPa + equipmentLossPa) * 100 : 0), 1),
       status: accepted ? "ACCEPTED" : oversized ? "OVERSIZED_LOW_FRICTION" : "REVIEW",
       explanation: accepted
         ? "Duct friction rate is inside the selected calibration band."
