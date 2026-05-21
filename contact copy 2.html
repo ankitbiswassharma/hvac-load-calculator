@@ -165,7 +165,11 @@
     padding: 12px;
     display: grid;
     gap: 6px;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
   }
+  .auth-plan-card:hover { border-color: rgba(79,164,255,0.45); }
   .auth-plan-card strong { font-size: 12px; color: var(--text); }
   .auth-plan-card span { font-size: 10px; color: var(--text3); font-family: var(--mono); line-height: 1.45; }
   .auth-inline-note {
@@ -1244,11 +1248,11 @@
       </form>
 
       <form id="auth-quote-form" class="auth-form">
-        <div class="auth-plan-grid">
-          <div class="auth-plan-card"><strong>Up to 5 Users</strong><span>₹25,000 / year<br>Company license with 1 admin + up to 5 total users.</span></div>
-          <div class="auth-plan-card"><strong>6 to 10 Users</strong><span>₹40,000 / year<br>Higher seat bundle for growing teams.</span></div>
-          <div class="auth-plan-card"><strong>11 to 15 Users</strong><span>₹60,000 / year<br>Extended annual license for larger engineering teams.</span></div>
-          <div class="auth-plan-card"><strong>Source License</strong><span>₹5,00,000<br>Source access / enterprise route with custom deployment scope.</span></div>
+        <div class="auth-plan-grid" id="auth-plan-grid">
+          <button type="button" class="auth-plan-card" data-plan-code="annual_5"><strong>Up to 5 Users</strong><span>₹25,000 / year<br>Company license with 1 admin + up to 5 total users.</span></button>
+          <button type="button" class="auth-plan-card" data-plan-code="annual_10"><strong>6 to 10 Users</strong><span>₹40,000 / year<br>Higher seat bundle for growing teams.</span></button>
+          <button type="button" class="auth-plan-card" data-plan-code="annual_15"><strong>11 to 15 Users</strong><span>₹60,000 / year<br>Extended annual license for larger engineering teams.</span></button>
+          <button type="button" class="auth-plan-card" data-plan-code="source"><strong>Source License</strong><span>₹5,00,000<br>Source access / enterprise route with custom deployment scope.</span></button>
         </div>
         <div class="field">
           <label>NAME</label>
@@ -2543,6 +2547,7 @@
           </div>
         </div>
         <div class="auth-form-actions" style="margin-top:14px;">
+          <button class="btn btn-secondary" type="button" id="owner-save-plan-price-btn">Save Package Price</button>
           <button class="btn btn-primary" type="button" id="owner-save-pricing-btn">Save Company Pricing</button>
         </div>
         <div id="owner-pricing-note-status" class="admin-note">Choose a company and plan to override pricing for a specific account.</div>

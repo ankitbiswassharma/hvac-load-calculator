@@ -756,6 +756,15 @@ class PostgresStore {
     return result.rows[0] ? licensingPlanRow(result.rows[0]) : null;
   }
 
+  async updateLicensingPlanPrice(planCode, annualPriceInr) {
+    await this.init();
+    const result = await this.pool.query(
+      "UPDATE licensing_plans SET annual_price_inr = $2, updated_at = NOW() WHERE plan_code = $1 AND is_active = TRUE RETURNING *",
+      [planCode, annualPriceInr]
+    );
+    return result.rows[0] ? licensingPlanRow(result.rows[0]) : null;
+  }
+
   async listCompanyPricingOverrides(companyId) {
     await this.init();
     const values = [];

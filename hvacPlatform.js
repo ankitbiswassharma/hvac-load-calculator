@@ -9270,6 +9270,7 @@
       if (previousPlanValue && Array.from(byId("owner-pricing-plan").options).some(function (option) { return option.value === previousPlanValue; })) {
         byId("owner-pricing-plan").value = previousPlanValue;
       }
+      syncOwnerPricingAmountToPlan();
     }
 
     if (byId("owner-companies-table")) {
@@ -9603,6 +9604,7 @@
     platform.licensingPlans = response.plans || [];
     platform.razorpayEnabled = !!response.razorpayEnabled;
     platform.razorpayKeyId = response.razorpayKeyId || "";
+    renderAuthPlanCards();
     const planSelect = byId("auth-quote-plan");
     if (planSelect && platform.licensingPlans.length) {
       planSelect.innerHTML = platform.licensingPlans.map(function (plan) {
@@ -9611,6 +9613,47 @@
           + escapeHtml(plan.planName) + " · " + formatCurrency(plan.annualPriceInr) + " / " + durationLabel
           + "</option>";
       }).join("");
+    }
+    syncOwnerPricingAmountToPlan();
+  }
+
+  function planDescription(plan) {
+    if (!plan) {
+      return "";
+    }
+    if (plan.licenseType === "source") {
+      return "Source access / enterprise route with custom deployment scope.";
+    }
+    const upperLimit = plan.userLimit || plan.userMax || 1;
+    return "Company license with 1 admin + up to " + formatInt(upperLimit) + " total users.";
+  }
+
+  function renderAuthPlanCards() {
+    const grid = byId("auth-plan-grid");
+    if (!grid || !platform.licensingPlans.length) {
+      return;
+    }
+    grid.innerHTML = platform.licensingPlans.map(function (plan) {
+      const durationLabel = plan.licenseType === "source" ? "license" : "year";
+      return '<button type="button" class="auth-plan-card" data-plan-code="' + escapeHtml(plan.planCode) + '">'
+        + '<strong>' + escapeHtml(plan.planName) + '</strong>'
+        + '<span>' + escapeHtml(formatCurrency(plan.annualPriceInr) + " / " + durationLabel) + '<br>'
+        + escapeHtml(planDescription(plan)) + '</span>'
+        + '</button>';
+    }).join("");
+  }
+
+  function syncOwnerPricingAmountToPlan() {
+    const planCode = valueOf("owner-pricing-plan", "");
+    const amountEl = byId("owner-pricing-amount");
+    if (!planCode || !amountEl || amountEl.dataset.manual === "true") {
+      return;
+    }
+    const plan = (platform.licensingPlans || []).find(function (entry) {
+      return entry.planCode === planCode;
+    });
+    if (plan && plan.annualPriceInr > 0) {
+      amountEl.value = String(plan.annualPriceInr);
     }
   }
 
@@ -9784,6 +9827,45 @@
     }
     if (response && response.ok) {
       renderOwnerDashboard();
+    }
+  }
+
+  async function saveLicensingPlanPrice() {
+    if (!(window.ServerApi && await window.ServerApi.isAvailable())) {
+      return;
+    }
+    const planCode = valueOf("owner-pricing-plan", "");
+    const annualPriceInr = numberOf("owner-pricing-amount", 0);
+    const statusEl = byId("owner-pricing-note-status");
+
+    if (!planCode || annualPriceInr <= 0) {
+      if (statusEl) {
+        statusEl.textContent = "Choose a package and enter a valid price before saving.";
+      }
+      return;
+    }
+
+    const response = await window.ServerApi.updateLicensingPlanPrice({
+      planCode: planCode,
+      annualPriceInr: annualPriceInr
+    });
+
+    if (response && response.ok) {
+      platform.licensingPlans = response.plans || platform.licensingPlans;
+      const amountEl = byId("owner-pricing-amount");
+      if (amountEl) {
+        amountEl.dataset.manual = "";
+      }
+      renderAuthPlanCards();
+      await loadLicensingPlans();
+      if (statusEl) {
+        statusEl.textContent = response.message;
+      }
+      return;
+    }
+
+    if (statusEl) {
+      statusEl.textContent = response && response.error ? response.error : "Unable to save package price.";
     }
   }
 
@@ -10062,6 +10144,25 @@
       });
     }
 
+    const planGrid = byId("auth-plan-grid");
+    if (planGrid) {
+      planGrid.addEventListener("click", function (event) {
+        const card = event.target.closest(".auth-plan-card");
+        if (!card) {
+          return;
+        }
+        const planCode = card.getAttribute("data-plan-code") || "";
+        if (planCode) {
+          setValue("auth-quote-plan", planCode);
+        }
+        if (valueOf("auth-quote-name", "") && valueOf("auth-quote-company", "") && valueOf("auth-quote-phone", "") && valueOf("auth-quote-email", "")) {
+          handleLicensePurchase();
+        } else {
+          setAuthMessage("Package selected. Fill name, email, phone, and company, then click Pay with Razorpay.", "");
+        }
+      });
+    }
+
     const sendResetTokenButton = byId("auth-send-reset-token-btn");
     if (sendResetTokenButton) {
       sendResetTokenButton.addEventListener("click", async function () {
@@ -10086,6 +10187,31 @@
     if (ownerPricingButton) {
       ownerPricingButton.addEventListener("click", function () {
         saveCompanyPricingOverride();
+      });
+    }
+
+    const ownerPlanPriceButton = byId("owner-save-plan-price-btn");
+    if (ownerPlanPriceButton) {
+      ownerPlanPriceButton.addEventListener("click", function () {
+        saveLicensingPlanPrice();
+      });
+    }
+
+    const ownerPricingPlan = byId("owner-pricing-plan");
+    if (ownerPricingPlan) {
+      ownerPricingPlan.addEventListener("change", function () {
+        const amountEl = byId("owner-pricing-amount");
+        if (amountEl) {
+          amountEl.dataset.manual = "";
+        }
+        syncOwnerPricingAmountToPlan();
+      });
+    }
+
+    const ownerPricingAmount = byId("owner-pricing-amount");
+    if (ownerPricingAmount) {
+      ownerPricingAmount.addEventListener("input", function () {
+        ownerPricingAmount.dataset.manual = "true";
       });
     }
 

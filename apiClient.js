@@ -327,6 +327,13 @@
       });
     },
 
+    async updateLicensingPlanPrice(payload) {
+      return request("/api/owner/licensing-plan-price", {
+        method: "POST",
+        body: JSON.stringify(payload || {})
+      });
+    },
+
     async getCompanyOverview(companyId) {
       const query = companyId ? "?companyId=" + encodeURIComponent(companyId) : "";
       return request("/api/company/overview" + query, { method: "GET" });

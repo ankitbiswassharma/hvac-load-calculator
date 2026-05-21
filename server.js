@@ -3272,6 +3272,36 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.method === "POST" && pathname === "/api/owner/licensing-plan-price") {
+    const session = await requireOwner(req, res);
+    if (!session) {
+      return;
+    }
+
+    const payload = await parseBody(req);
+    const planCode = cleanText(payload.planCode);
+    const annualPriceInr = integerOrDefault(payload.annualPriceInr, 0);
+
+    if (!planCode || annualPriceInr <= 0) {
+      sendJson(res, 400, { ok: false, error: "Plan and valid package price are required." });
+      return;
+    }
+
+    const updatedPlan = await store.updateLicensingPlanPrice(planCode, annualPriceInr);
+    if (!updatedPlan) {
+      sendJson(res, 404, { ok: false, error: "Licensing plan was not found." });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      message: updatedPlan.planName + " price saved as " + formatInr(updatedPlan.annualPriceInr) + ". Razorpay orders for this package will use this price.",
+      plan: updatedPlan,
+      plans: await store.listLicensingPlans()
+    });
+    return;
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/overview") {
     const session = await requireCompanyAdmin(req, res);
     if (!session) {
