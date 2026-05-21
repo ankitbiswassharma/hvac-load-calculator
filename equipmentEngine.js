@@ -219,6 +219,22 @@
     };
   }
 
+  function airflowCapabilityPenalty(candidate, requirements) {
+    // If the base model + section count cannot physically deliver the
+    // required airflow within the same fan/section module limits (we cap
+    // air sections at ~8 per cooling unit), penalize heavily so the selector
+    // picks a larger base model. Without this, a 1.5 TR / 550 CFM base
+    // appears "cheap" by TR alone even when it's 20× short on airflow.
+    if (!candidate || !candidate.baseModel) return 0;
+    const sectionsPerUnit = 8;
+    const achievableCFM = candidate.baseModel.maxAirflowCFM
+      * Math.max(1, candidate.coolingUnitCount) * sectionsPerUnit;
+    const required = Math.max(0, requirements.airflowCFM || 0);
+    if (required <= 0 || achievableCFM <= 0) return 0;
+    const shortfall = Math.max(0, required - achievableCFM) / required;
+    return shortfall * 60;
+  }
+
   function scoreCoolingAdequate(candidate, requirements) {
     const targetDeviation = Math.abs(candidate.capacityTR - requirements.targetTRWithMargin) / Math.max(requirements.requiredTRFinal, 1);
     const excessOversize = Math.max(0, candidate.capacityTR - requirements.targetTRWithMargin) / Math.max(requirements.requiredTRFinal, 1);
@@ -231,6 +247,7 @@
       + reservePenalty * 4.8
       + highMarginPenalty
       + unitPenalty
+      + airflowCapabilityPenalty(candidate, requirements)
       + candidate.baseModel.nominalMotorKW * candidate.coolingUnitCount * 0.03;
   }
 
@@ -398,11 +415,21 @@
       };
     }
     const minimumSections = Math.max(1, cooling.coolingUnitCount);
-    const maximumSections = Math.min(
-      Math.max(minimumSections, Math.floor(finiteOr(settings.maxAirSectionsAllowed, 6))),
-      Math.max(
-        minimumSections + 4,
-        Math.ceil(requirements.airflowCFM / Math.max(cooling.baseModel.minAirflowCFM * 0.75, 1)) + 2
+    // Scale the section cap with the required airflow so cleanroom and
+    // high-recirculation systems can actually deliver the supply CFM.
+    // Previous code clamped to 6, which made small-base candidates unable
+    // to ever cover (e.g.) 32 000 CFM regardless of how many sections were
+    // permitted by the catalog.
+    const airflowDrivenSectionFloor = Math.ceil(
+      requirements.airflowCFM / Math.max(cooling.baseModel.nominalAirflowCFM, 1)
+    ) + 1;
+    const defaultMaxSections = Math.max(8, airflowDrivenSectionFloor);
+    const maximumSections = Math.max(
+      minimumSections + 4,
+      Math.min(
+        Math.floor(finiteOr(settings.maxAirSectionsAllowed, defaultMaxSections)),
+        // Hard ceiling so the search space stays bounded
+        128
       )
     );
     const candidatePool = [];

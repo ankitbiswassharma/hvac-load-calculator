@@ -3,8 +3,10 @@ set -euo pipefail
 
 APP_DOMAIN="${APP_DOMAIN:-hvac.muskit.in}"
 APP_DIR="${APP_DIR:-/opt/hvac}"
-TRAEFIK_PROJECT_DIR="${TRAEFIK_PROJECT_DIR:-/opt/website}"
-TRAEFIK_NETWORK="${TRAEFIK_NETWORK:-muskit_website_default}"
+# Production Traefik stack on the Hostinger VPS lives here and uses the
+# Docker network "app_default". Override via env vars if your layout differs.
+TRAEFIK_PROJECT_DIR="${TRAEFIK_PROJECT_DIR:-/home/webapp/app}"
+TRAEFIK_NETWORK="${TRAEFIK_NETWORK:-app_default}"
 TRAEFIK_DYNAMIC_DIR="${TRAEFIK_DYNAMIC_DIR:-${TRAEFIK_PROJECT_DIR}/traefik/dynamic}"
 ROUTE_SOURCE="${APP_DIR}/deploy/traefik/dynamic/hvac.yml"
 ROUTE_DEST="${TRAEFIK_DYNAMIC_DIR}/hvac.yml"
