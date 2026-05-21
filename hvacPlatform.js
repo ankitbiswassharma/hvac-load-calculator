@@ -6953,6 +6953,7 @@
       ["14", "BOQ/costing"],
       ["15", "Energy"],
       ["16", "AI design studio"],
+      ["16A", "ASHRAE engine — full sized design"],
       ["17", "3D schematic summary"]
     ];
     return '<div class="report-subtitle">Report Contents</div><div class="report-index">' + sections.map(function (section) {
@@ -7089,6 +7090,157 @@
           return '<div class="report-inline-note">' + escapeHtml(assumption) + '</div>';
         }).join("") + '</div>'
         : '<div class="report-inline-note">No explicit assumptions were captured for this run.</div>');
+  }
+
+  // -------------------------------------------------------------------
+  // ASHRAE engine — full sized design report block.
+  // Pulls from window.__lastAshraeDesign (set by aiDesignerUI.js when the
+  // user clicks "Generate full design" or "Auto-fix"). If nothing has
+  // been generated yet, emits a placeholder so the section still appears
+  // in the PDF index and the user knows where to find it.
+  // -------------------------------------------------------------------
+  function buildAshraeDesignReportMarkup() {
+    const wrap = (typeof window !== "undefined") ? window : {};
+    const payload = wrap.__lastAshraeDesign || wrap.__lastAshraeAutofix || null;
+    if (!payload || !payload.design) {
+      return ''
+        + '<div class="report-inline-note">'
+        + 'No ASHRAE-engine design has been generated for this session yet. '
+        + 'Open the <b>AI Design Studio</b> panel and click <b>Generate full design</b> '
+        + '(or <b>Auto-fix</b>) before printing this report so the engine output is captured here.'
+        + '</div>';
+    }
+    const design = payload.design;
+    const a = design.aggregate || {};
+    const fan = design.fan || {};
+    const pump = design.pump;
+    const rooms = design.rooms || [];
+
+    function roundNum(value, digits) {
+      const factor = Math.pow(10, digits || 0);
+      return Math.round((Number(value) || 0) * factor) / factor;
+    }
+
+    const cards = ''
+      + '<div class="report-summary-grid">'
+      +   reportSummaryCard("Total Cooling", roundNum(a.totalLoadW / 1000, 1) + " kW", roundNum(a.totalLoadW, 0) + " W total")
+      +   reportSummaryCard("Selected Tonnage", roundNum(a.selectedTR, 1) + " TR", "Diversified " + roundNum(a.diversifiedTR, 2) + " TR")
+      +   reportSummaryCard("Supply Air", formatInt(a.totalCfm) + " CFM", "System type: " + (design.systemType || "—"))
+      +   reportSummaryCard("Fan Motor Input", roundNum(fan.motorInputKw, 2) + " kW", roundNum(fan.shaftKw, 2) + " kW shaft")
+      +   reportSummaryCard("Fan W/CFM", roundNum(fan.wPerCfm, 2),
+            "ASHRAE 90.1 limit " + (fan.ashrae90_1Limit || 1.1) + " · "
+            + (fan.ashrae90_1Compliant ? "COMPLIANT" : "REVIEW"))
+      +   reportSummaryCard("Diversity factor", roundNum(a.diversityFactor || 1, 2),
+            "Applied to load only — airflow is not discounted")
+      +   reportSummaryCard("External SP", formatInt(fan.externalSpPa || 0) + " Pa",
+            roundNum(fan.fanEfficiency || 0.65, 2) + " fan η")
+      +   reportSummaryCard("Engine version", "v" + (design.engineVersion || "?"),
+            "engine/ashrae · ASHRAE HOF psychrometrics")
+      + '</div>';
+
+    // Room rollup table
+    const roomRows = rooms.map(function (r) {
+      const rl = r.roomLoad || {};
+      const sa = r.supplyAir || {};
+      return '<tr>'
+        + '<td>' + escapeHtml(r.room || "Room") + '</td>'
+        + '<td class="num">' + formatInt(rl.sensibleW || 0) + '</td>'
+        + '<td class="num">' + formatInt(rl.latentW || 0) + '</td>'
+        + '<td class="num">' + formatInt(rl.totalW || 0) + '</td>'
+        + '<td class="num">' + roundNum(rl.shr || 0, 2) + '</td>'
+        + '<td class="num">' + formatInt(sa.cfm || 0) + '</td>'
+        + '<td class="num">' + roundNum(r.designTR || 0, 2) + '</td>'
+        + '<td class="num">' + (r.selectedTR || 0) + '</td>'
+        + '</tr>';
+    }).join("");
+    const roomTable = ''
+      + '<div class="report-subtitle">Room rollup</div>'
+      + '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr>'
+      +   '<th>Room</th><th>Sens. W</th><th>Lat. W</th><th>Total W</th>'
+      +   '<th>SHR</th><th>CFM</th><th>Design TR</th><th>Sel. TR</th>'
+      + '</tr></thead>'
+      + '<tbody>' + (roomRows || '<tr><td colspan="8">No rooms in design.</td></tr>') + '</tbody>'
+      + '</table>';
+
+    // Components for first room (assumed representative)
+    const firstRoom = rooms[0] || { components: [] };
+    const compRows = (firstRoom.components || []).map(function (c) {
+      return '<tr>'
+        + '<td>' + escapeHtml(c.kind) + '</td>'
+        + '<td class="num">' + formatInt(c.sensibleW || 0) + '</td>'
+        + '<td class="num">' + formatInt(c.latentW || 0) + '</td>'
+        + '</tr>';
+    }).join("");
+    const compTable = ''
+      + '<div class="report-subtitle">Load components &mdash; ' + escapeHtml(firstRoom.room || "Room") + '</div>'
+      + '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr><th>Component</th><th>Sensible W</th><th>Latent W</th></tr></thead>'
+      + '<tbody>' + (compRows || '<tr><td colspan="3">No components reported.</td></tr>') + '</tbody>'
+      + '</table>';
+
+    // Pump block (optional)
+    const pumpBlock = pump
+      ? '<div class="report-inline-note">'
+        + '<b>Chilled-water pump:</b> '
+        + roundNum(pump.flowLps, 1) + ' L/s · '
+        + formatInt(pump.flowGpm) + ' GPM · '
+        + roundNum(pump.headM, 1) + ' m head · '
+        + roundNum(pump.electricalKw, 2) + ' kW input.'
+        + '</div>'
+      : "";
+
+    // Narrative
+    const narr = payload.narrative;
+    const narrBlock = (narr && narr.summary)
+      ? '<div class="report-ai-card">'
+        + '<div class="report-ai-card-title">AI engineering narrative</div>'
+        + '<div class="report-ai-card-body">' + escapeHtml(narr.summary) + '</div>'
+        + (Array.isArray(narr.design_decisions) && narr.design_decisions.length
+            ? '<div class="report-ai-card-body"><b>Decisions:</b><ul>'
+              + narr.design_decisions.map(function (d) { return '<li>' + escapeHtml(d) + '</li>'; }).join("")
+              + '</ul></div>'
+            : "")
+        + (Array.isArray(narr.risks) && narr.risks.length
+            ? '<div class="report-ai-card-body"><b>Risks:</b><ul>'
+              + narr.risks.map(function (d) { return '<li>' + escapeHtml(d) + '</li>'; }).join("")
+              + '</ul></div>'
+            : "")
+        + '</div>'
+      : "";
+
+    // Auto-fix transcript if present
+    const autofix = wrap.__lastAshraeAutofix;
+    const autofixBlock = (autofix && autofix.log && autofix.log.length)
+      ? (function () {
+          const rows = autofix.log.map(function (s) {
+            return '<tr>'
+              + '<td class="num">' + s.iter + '</td>'
+              + '<td>' + ((s.fails || []).join(", ") || "<em>none</em>") + '</td>'
+              + '<td>' + Object.entries(s.intent || {}).map(function (e) { return e[0] + "=" + e[1]; }).join("; ") + '</td>'
+              + '</tr>';
+          }).join("");
+          return '<div class="report-subtitle">Auto-fix transcript</div>'
+            + '<div>' + reportStatusPill(autofix.success
+                  ? "CONVERGED in " + autofix.iterations + " step(s)"
+                  : "PARTIAL — " + autofix.iterations + " step(s)")
+            + '</div>'
+            + '<table style="width:100%;border-collapse:collapse;margin-top:6px;">'
+            + '<thead><tr><th>Iter</th><th>Failing constraints</th><th>Intent applied</th></tr></thead>'
+            + '<tbody>' + rows + '</tbody></table>';
+        })()
+      : "";
+
+    return ''
+      + cards
+      + '<div class="report-inline-note">The numbers above come from <b>engine/ashrae</b> '
+      + '(SI ASHRAE psychrometrics, monthly clear-sky solar model, ASHRAE 90.1 fan power limits). '
+      + 'AI narrates them but never invents values.</div>'
+      + roomTable
+      + compTable
+      + pumpBlock
+      + narrBlock
+      + autofixBlock;
   }
 
   function buildAiReportMarkup(result) {
@@ -8467,6 +8619,10 @@
         buildAiReportMarkup(result),
         "report-page-break"
       )
+      + reportBlock("16A · ASHRAE ENGINE — FULL SIZED DESIGN",
+        buildAshraeDesignReportMarkup(),
+        "report-page-break"
+      )
       + reportBlock("17 · 3D SCHEMATIC SUMMARY",
         firstResultsGridMarkup("p-schematic3d")
         + '<div class="report-grid-2">'
@@ -8526,53 +8682,73 @@
       + '.btn-row, .section-note, .btn { display: none !important; }'
 
       // ---- Cover ----
+      // Keep the existing 2-column grid in the markup; we only restyle the
+      // background and typography. The earlier override forced flex-column
+      // and squashed the grid, producing the messy split-text cover.
       + '.report-cover-shell {'
       +   'page-break-after: always;'
-      +   'background: linear-gradient(135deg,#0b1e3a 0%, #1e3a8a 60%, #2563eb 100%) !important;'
-      +   'color: #fff !important;'
-      +   'padding: 50px 44px !important;'
+      +   'background: linear-gradient(135deg, #0b1e3a 0%, #173a73 55%, #1e40af 100%) !important;'
+      +   'color: #f8fafc !important;'
       +   'border-radius: 0 !important;'
-      +   'min-height: 260mm;'
-      +   'display: flex; flex-direction: column; justify-content: space-between;'
+      +   'min-height: 0;'
+      +   'overflow: hidden;'
+      + '}'
+      + '.report-cover-shell::before { display: none !important; }'
+      + '.report-cover-top {'
+      +   'display: grid !important;'
+      +   'grid-template-columns: 1.15fr 0.85fr !important;'
+      +   'gap: 0 !important;'
+      + '}'
+      + '.report-cover-title-zone {'
+      +   'padding: 34px 38px !important; color: #f8fafc !important;'
       + '}'
       + '.report-cover-eyebrow {'
       +   'font-family: \"JetBrains Mono\", \"Consolas\", monospace;'
-      +   'font-size: 9pt; letter-spacing: .25em; text-transform: uppercase;'
+      +   'font-size: 8.5pt; letter-spacing: .20em; text-transform: uppercase;'
       +   'color: #93c5fd !important; margin-bottom: 14px;'
+      +   'white-space: normal;'
       + '}'
       + '.report-cover-title {'
-      +   'font-size: 38pt; font-weight: 800; line-height: 1.08; letter-spacing: -0.02em;'
-      +   'color: #ffffff !important; margin: 0 0 16px 0;'
+      +   'font-size: 32pt; font-weight: 800; line-height: 1.08; letter-spacing: -0.02em;'
+      +   'color: #ffffff !important; margin: 0 0 14px 0;'
       + '}'
       + '.report-cover-subtitle {'
-      +   'color: #dbeafe !important; font-size: 11.5pt; max-width: 480px; line-height: 1.55;'
+      +   'color: #cfe0f8 !important; font-size: 10.5pt; line-height: 1.55;'
+      +   'max-width: 100%;'
       + '}'
       + '.report-chip {'
-      +   'display: inline-block; padding: 6px 14px; border-radius: 999px;'
+      +   'display: inline-block; padding: 5px 12px; border-radius: 999px;'
       +   'background: rgba(255,255,255,.12) !important;'
       +   'color: #ffffff !important;'
-      +   'font-family: \"JetBrains Mono\", monospace; font-size: 8.5pt; letter-spacing: .14em;'
-      +   'border: 1px solid rgba(255,255,255,.28);'
+      +   'font-family: \"JetBrains Mono\", monospace; font-size: 7.5pt;'
+      +   'letter-spacing: .14em; text-transform: uppercase;'
+      +   'border: 1px solid rgba(255,255,255,.25);'
       + '}'
+      + '.report-cover-brand,'
       + '.report-cover-brand-card {'
-      +   'background: rgba(255,255,255,.08) !important;'
-      +   'border: 1px solid rgba(255,255,255,.18);'
-      +   'border-radius: 14px; padding: 24px 28px;'
+      +   'background: rgba(255,255,255,0.06) !important;'
+      +   'border-left: 1px solid rgba(255,255,255,0.10) !important;'
+      +   'border-radius: 0 !important;'
+      +   'padding: 34px 30px !important;'
+      +   'color: #f8fafc !important;'
       + '}'
-      + '.report-brand-word { color: #ffffff !important; font-size: 30pt; font-weight: 800; letter-spacing: -0.01em; }'
+      + '.report-brand-word { color: #ffffff !important; font-size: 26pt; font-weight: 800; letter-spacing: -0.01em; }'
       + '.report-brand-main { color: #ffffff !important; }'
       + '.report-brand-accent { color: #60a5fa !important; }'
-      + '.report-brand-tag { color: #cbd5f5 !important; font-size: 9.5pt; letter-spacing: .08em; text-transform: uppercase; }'
+      + '.report-brand-tag { color: #cbd5f5 !important; font-size: 8.5pt; letter-spacing: .12em; text-transform: uppercase; margin-top: 6px; }'
 
       // ---- Section blocks ----
+      // page-break-inside: avoid keeps short sections together, but for long
+      // sections the browser still breaks naturally between rows because of
+      // the tr-level avoid above.
       + '.report-block {'
       +   'background: #ffffff !important;'
       +   'box-shadow: none !important;'
       +   'border: none !important;'
       +   'border-radius: 0 !important;'
-      +   'padding: 14px 0 !important;'
-      +   'margin: 0 0 18px 0 !important;'
-      +   'page-break-inside: avoid;'
+      +   'padding: 6px 0 !important;'
+      +   'margin: 0 0 14px 0 !important;'
+      +   'page-break-inside: auto !important;'
       + '}'
       + '.report-block.report-page-break { page-break-before: always; }'
       + '.report-section-head {'
@@ -8634,20 +8810,26 @@
       // ---- Tables ----
       + '#report-content table {'
       +   'border-collapse: collapse !important; width: 100% !important;'
-      +   'font-size: 9.5pt !important; margin: 6px 0 !important;'
+      +   'font-size: 9pt !important; margin: 6px 0 !important;'
       +   'background: #ffffff !important;'
+      +   'table-layout: auto !important;'
+      +   'page-break-inside: auto !important;'
       + '}'
+      + '#report-content tr { page-break-inside: avoid !important; }'
       + '#report-content th {'
       +   'background: #0f172a !important; color: #ffffff !important;'
-      +   'text-align: left; padding: 7px 10px !important;'
-      +   'font-weight: 600 !important; font-size: 9pt !important;'
+      +   'text-align: left; padding: 6px 8px !important;'
+      +   'font-weight: 600 !important; font-size: 8.5pt !important;'
       +   'letter-spacing: .04em; text-transform: uppercase;'
+      +   'border-bottom: none !important;'
       + '}'
       + '#report-content td {'
-      +   'padding: 6px 10px !important;'
+      +   'padding: 5px 8px !important;'
       +   'border-bottom: 1px solid #e2e8f0 !important;'
       +   'vertical-align: top;'
+      +   'word-break: break-word;'
       + '}'
+      + '#report-content td.num { text-align: right; font-family: \"JetBrains Mono\", monospace; }'
       + '#report-content tbody tr:nth-child(even) td { background: #f8fafc !important; }'
       + '#report-content tbody tr:last-child td { border-bottom: 1px solid #cbd5e1 !important; }'
 

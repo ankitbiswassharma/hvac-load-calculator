@@ -113,17 +113,34 @@
   // Renderers
   // -----------------------------------------------------------------
   function chip(text, tone) {
-    const bg = tone === "ok" ? "#dcfce7" : tone === "warn" ? "#fef3c7" : tone === "bad" ? "#fee2e2" : "#e0e7ff";
-    const fg = tone === "ok" ? "#166534" : tone === "warn" ? "#92400e" : tone === "bad" ? "#991b1b" : "#3730a3";
-    return `<span style="display:inline-block;padding:2px 8px;border-radius:9999px;font-family:var(--mono);font-size:11px;background:${bg};color:${fg};font-weight:600;">${text}</span>`;
+    // Dark-theme chips — semitransparent fills over var(--bg3)
+    const bg = tone === "ok"   ? "rgba(0,201,167,0.16)"
+             : tone === "warn" ? "rgba(245,158,11,0.18)"
+             : tone === "bad"  ? "rgba(239,68,68,0.18)"
+             :                   "rgba(0,144,255,0.18)";
+    const fg = tone === "ok"   ? "#22d3a3"
+             : tone === "warn" ? "#fbbf24"
+             : tone === "bad"  ? "#f87171"
+             :                   "#60a5fa";
+    const border = tone === "ok"   ? "rgba(0,201,167,0.35)"
+                 : tone === "warn" ? "rgba(245,158,11,0.4)"
+                 : tone === "bad"  ? "rgba(239,68,68,0.4)"
+                 :                   "rgba(0,144,255,0.4)";
+    return '<span style="display:inline-block;padding:2px 10px;border-radius:9999px;'
+      + 'font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;'
+      + 'background:' + bg + ';color:' + fg + ';border:1px solid ' + border + ';">' + text + '</span>';
   }
 
   function metricTile(label, value, unit, accent) {
-    const color = accent || "#3b82f6";
-    return `<div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid ${color};border-radius:8px;padding:10px 14px;">
-      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:#64748b;text-transform:uppercase;">${label}</div>
-      <div style="font-size:22px;font-weight:700;color:#0f172a;margin-top:2px;">${value}<span style="font-size:13px;font-weight:500;color:#64748b;margin-left:4px;">${unit || ""}</span></div>
-    </div>`;
+    const color = accent || "var(--accent2)";
+    return '<div style="background:var(--bg3);border:1px solid var(--border);'
+      + 'border-left:3px solid ' + color + ';border-radius:8px;padding:10px 14px;">'
+      + '<div style="font-family:var(--mono);font-size:9.5px;letter-spacing:.10em;'
+      + 'color:var(--text3);text-transform:uppercase;">' + label + '</div>'
+      + '<div style="font-size:22px;font-weight:600;color:var(--text);margin-top:4px;'
+      + 'font-family:var(--mono);">' + value
+      + '<span style="font-size:12px;font-weight:400;color:var(--text2);margin-left:6px;">'
+      + (unit || "") + '</span></div></div>';
   }
 
   function renderDesign(design, narrative) {
@@ -132,137 +149,184 @@
     const pump = design.pump;
     const fanCompliant = fan.ashrae90_1Compliant === true;
     const tiles = [
-      metricTile("Total Cooling", fmt(a.totalLoadW / 1000, 1), "kW", "#3b82f6"),
-      metricTile("Selected Tonnage", fmt(a.selectedTR, 1), "TR", "#22c55e"),
-      metricTile("Total Supply Air", fmtInt(a.totalCfm), "CFM", "#f59e0b"),
-      metricTile("Fan Motor Input", fmt(fan.motorInputKw, 2), "kW", "#a855f7"),
-      metricTile("Fan W/CFM", fmt(fan.wPerCfm, 2), `≤ ${fan.ashrae90_1Limit}`, fanCompliant ? "#22c55e" : "#ef4444"),
-      metricTile("Diversified TR", fmt(a.diversifiedTR, 1), "TR", "#0ea5e9")
+      metricTile("Total Cooling",    fmt(a.totalLoadW / 1000, 1), "kW",  "var(--accent2)"),
+      metricTile("Selected Tonnage", fmt(a.selectedTR, 1),        "TR",  "var(--accent)"),
+      metricTile("Total Supply Air", fmtInt(a.totalCfm),          "CFM", "var(--accent3)"),
+      metricTile("Fan Motor Input",  fmt(fan.motorInputKw, 2),    "kW",  "var(--accent5)"),
+      metricTile("Fan W/CFM",        fmt(fan.wPerCfm, 2), "≤ " + fan.ashrae90_1Limit,
+                                                                   fanCompliant ? "var(--accent)" : "var(--accent4)"),
+      metricTile("Diversified TR",   fmt(a.diversifiedTR, 1),     "TR",  "var(--accent2)")
     ].join("");
 
+    const tdBase = 'padding:7px 10px;color:var(--text);font-family:var(--mono);border-bottom:1px solid var(--border);';
+    const tdR = tdBase + 'text-align:right;';
+    const thBase = 'padding:8px 10px;text-align:left;color:var(--text3);font-family:var(--mono);'
+      + 'font-size:10px;letter-spacing:.10em;text-transform:uppercase;border-bottom:1px solid var(--border2);';
+    const thR = thBase + 'text-align:right;';
+    const tableBase = 'width:100%;border-collapse:collapse;font-size:12px;background:var(--bg3);'
+      + 'border:1px solid var(--border);border-radius:8px;overflow:hidden;';
+
     const roomRows = (design.rooms || []).map(r =>
-      `<tr>
-        <td style="padding:6px 8px;">${r.room}</td>
-        <td style="padding:6px 8px;text-align:right;">${fmtInt(r.roomLoad.sensibleW)}</td>
-        <td style="padding:6px 8px;text-align:right;">${fmtInt(r.roomLoad.latentW)}</td>
-        <td style="padding:6px 8px;text-align:right;">${fmtInt(r.roomLoad.totalW)}</td>
-        <td style="padding:6px 8px;text-align:right;">${fmt(r.roomLoad.shr, 2)}</td>
-        <td style="padding:6px 8px;text-align:right;">${fmtInt(r.supplyAir.cfm)}</td>
-        <td style="padding:6px 8px;text-align:right;">${fmt(r.designTR, 2)}</td>
-      </tr>`
+      '<tr>'
+      + '<td style="' + tdBase + '">' + r.room + '</td>'
+      + '<td style="' + tdR + '">' + fmtInt(r.roomLoad.sensibleW) + '</td>'
+      + '<td style="' + tdR + '">' + fmtInt(r.roomLoad.latentW) + '</td>'
+      + '<td style="' + tdR + '">' + fmtInt(r.roomLoad.totalW) + '</td>'
+      + '<td style="' + tdR + '">' + fmt(r.roomLoad.shr, 2) + '</td>'
+      + '<td style="' + tdR + '">' + fmtInt(r.supplyAir.cfm) + '</td>'
+      + '<td style="' + tdR + '">' + fmt(r.designTR, 2) + '</td>'
+      + '</tr>'
     ).join("");
 
     const compRows = ((design.rooms[0] && design.rooms[0].components) || []).map(c =>
-      `<tr>
-        <td style="padding:4px 8px;">${c.kind}</td>
-        <td style="padding:4px 8px;text-align:right;">${fmtInt(c.sensibleW)}</td>
-        <td style="padding:4px 8px;text-align:right;">${fmtInt(c.latentW)}</td>
-      </tr>`
+      '<tr>'
+      + '<td style="' + tdBase + '">' + c.kind + '</td>'
+      + '<td style="' + tdR + '">' + fmtInt(c.sensibleW) + '</td>'
+      + '<td style="' + tdR + '">' + fmtInt(c.latentW) + '</td>'
+      + '</tr>'
     ).join("");
 
-    const pumpBlock = pump ? `
-      <div style="margin-top:12px;padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
-        <strong style="font-size:13px;color:#0f172a;">Chilled-water pump</strong>
-        <div style="font-family:var(--mono);font-size:12px;color:#475569;margin-top:4px;">
-          ${fmt(pump.flowLps, 1)} L/s · ${fmtInt(pump.flowGpm)} GPM · ${fmt(pump.headM, 1)} m head · ${fmt(pump.electricalKw, 2)} kW input
-        </div>
-      </div>` : "";
+    const pumpBlock = pump
+      ? '<div style="margin-top:12px;padding:10px 14px;background:var(--bg3);'
+        + 'border:1px solid var(--border);border-left:3px solid var(--accent5);border-radius:8px;">'
+        + '<div style="font-family:var(--mono);font-size:10px;color:var(--text3);'
+        + 'letter-spacing:.08em;text-transform:uppercase;">Chilled-water pump</div>'
+        + '<div style="font-family:var(--mono);font-size:12.5px;color:var(--text);margin-top:5px;">'
+        + fmt(pump.flowLps, 1) + ' L/s · '
+        + fmtInt(pump.flowGpm) + ' GPM · '
+        + fmt(pump.headM, 1) + ' m head · '
+        + fmt(pump.electricalKw, 2) + ' kW input</div></div>'
+      : "";
 
-    const narrativeBlock = narrative && narrative.summary ? `
-      <div style="margin-top:14px;padding:12px 16px;background:#eff6ff;border-left:4px solid #3b82f6;border-radius:6px;">
-        <strong style="color:#1e40af;font-size:13px;">AI engineering narrative</strong>
-        <p style="margin:6px 0 8px 0;font-size:13px;color:#1f2937;line-height:1.5;">${narrative.summary}</p>
-        ${Array.isArray(narrative.design_decisions) && narrative.design_decisions.length ?
-          `<div style="font-size:12px;color:#1e3a8a;"><strong>Decisions:</strong><ul style="margin:4px 0 0 18px;">${narrative.design_decisions.map(d=>`<li>${d}</li>`).join("")}</ul></div>` : ""}
-        ${Array.isArray(narrative.risks) && narrative.risks.length ?
-          `<div style="font-size:12px;color:#b91c1c;margin-top:6px;"><strong>Risks:</strong><ul style="margin:4px 0 0 18px;">${narrative.risks.map(d=>`<li>${d}</li>`).join("")}</ul></div>` : ""}
-      </div>` : "";
+    const narrativeBlock = (narrative && narrative.summary)
+      ? '<div style="margin-top:14px;padding:12px 16px;background:rgba(0,144,255,0.08);'
+        + 'border-left:3px solid var(--accent2);border-radius:6px;">'
+        + '<div style="color:var(--accent2);font-size:11px;font-family:var(--mono);'
+        + 'letter-spacing:.10em;text-transform:uppercase;">AI engineering narrative</div>'
+        + '<p style="margin:6px 0 8px 0;font-size:13px;color:var(--text);line-height:1.55;">'
+        + narrative.summary + '</p>'
+        + (Array.isArray(narrative.design_decisions) && narrative.design_decisions.length
+            ? '<div style="font-size:12px;color:var(--text2);"><strong style="color:var(--text);">Decisions:</strong>'
+              + '<ul style="margin:4px 0 0 18px;color:var(--text);">'
+              + narrative.design_decisions.map(function (d) { return '<li>' + d + '</li>'; }).join("")
+              + '</ul></div>'
+            : "")
+        + (Array.isArray(narrative.risks) && narrative.risks.length
+            ? '<div style="font-size:12px;color:var(--accent4);margin-top:6px;"><strong>Risks:</strong>'
+              + '<ul style="margin:4px 0 0 18px;">'
+              + narrative.risks.map(function (d) { return '<li>' + d + '</li>'; }).join("")
+              + '</ul></div>'
+            : "")
+        + '</div>'
+      : "";
 
-    return `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:14px;">${tiles}</div>
+    const sectionTitle = function (label) {
+      return '<div style="margin:18px 0 8px 0;font-family:var(--mono);font-size:10.5px;'
+        + 'letter-spacing:.16em;text-transform:uppercase;color:var(--text3);">' + label + '</div>';
+    };
 
-      <div style="margin-bottom:10px;">
-        ${chip(`System: ${design.systemType}`, "")}
-        ${chip(`Diversity: ${(a.diversityFactor||1).toFixed(2)}`, "")}
-        ${chip(`Fan: ${fanCompliant ? "ASHRAE 90.1 ✓" : "ASHRAE 90.1 ✗"}`, fanCompliant ? "ok" : "bad")}
-        ${chip(`Engine v${design.engineVersion || "?"}`, "")}
-      </div>
+    return ''
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));'
+      + 'gap:10px;margin-bottom:14px;">' + tiles + '</div>'
 
-      <h4 style="margin:14px 0 6px 0;font-size:13px;color:#0f172a;">Room rollup</h4>
-      <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;">
-        <thead style="background:#f1f5f9;">
-          <tr>
-            <th style="padding:8px;text-align:left;">Room</th>
-            <th style="padding:8px;text-align:right;">Sens. W</th>
-            <th style="padding:8px;text-align:right;">Lat. W</th>
-            <th style="padding:8px;text-align:right;">Total W</th>
-            <th style="padding:8px;text-align:right;">SHR</th>
-            <th style="padding:8px;text-align:right;">CFM</th>
-            <th style="padding:8px;text-align:right;">TR</th>
-          </tr>
-        </thead><tbody>${roomRows}</tbody></table></div>
+      + '<div style="margin-bottom:10px;display:flex;gap:6px;flex-wrap:wrap;">'
+      + chip('System: ' + design.systemType, "")
+      + chip('Diversity: ' + (a.diversityFactor || 1).toFixed(2), "")
+      + chip('Fan: ' + (fanCompliant ? 'ASHRAE 90.1 ✓' : 'ASHRAE 90.1 ✗'), fanCompliant ? "ok" : "bad")
+      + chip('Engine v' + (design.engineVersion || "?"), "")
+      + '</div>'
 
-      <h4 style="margin:14px 0 6px 0;font-size:13px;color:#0f172a;">Load components (first room)</h4>
-      <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;">
-        <thead style="background:#f1f5f9;"><tr><th style="padding:6px 8px;text-align:left;">Component</th><th style="padding:6px 8px;text-align:right;">Sensible W</th><th style="padding:6px 8px;text-align:right;">Latent W</th></tr></thead>
-        <tbody>${compRows}</tbody>
-      </table></div>
+      + sectionTitle('Room rollup')
+      + '<div style="overflow-x:auto;"><table style="' + tableBase + '">'
+      + '<thead><tr>'
+      +   '<th style="' + thBase + '">Room</th>'
+      +   '<th style="' + thR + '">Sens. W</th>'
+      +   '<th style="' + thR + '">Lat. W</th>'
+      +   '<th style="' + thR + '">Total W</th>'
+      +   '<th style="' + thR + '">SHR</th>'
+      +   '<th style="' + thR + '">CFM</th>'
+      +   '<th style="' + thR + '">TR</th>'
+      + '</tr></thead>'
+      + '<tbody>' + roomRows + '</tbody></table></div>'
 
-      ${pumpBlock}
-      ${narrativeBlock}
-    `;
+      + sectionTitle('Load components (first room)')
+      + '<div style="overflow-x:auto;"><table style="' + tableBase + '">'
+      + '<thead><tr>'
+      +   '<th style="' + thBase + '">Component</th>'
+      +   '<th style="' + thR + '">Sensible W</th>'
+      +   '<th style="' + thR + '">Latent W</th>'
+      + '</tr></thead>'
+      + '<tbody>' + compRows + '</tbody></table></div>'
+
+      + pumpBlock
+      + narrativeBlock;
   }
 
   function renderVariants(payload) {
     const options = payload.options || [];
     if (!options.length) {
-      return `<p style="color:var(--text3);">No variants returned.</p>`;
+      return '<p style="color:var(--text3);">No variants returned.</p>';
     }
-    return `
-      <h4 style="margin:0 0 8px 0;font-size:13px;color:#0f172a;">Ranked alternatives (preferred → least)</h4>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">
-        ${options.map((opt, i) => `
-          <div style="border:2px solid ${i===0 ? "#22c55e" : "#e2e8f0"};border-radius:10px;padding:12px;background:#fff;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-              <strong style="font-size:14px;color:#0f172a;">${opt.label}</strong>
-              ${chip(`Score ${opt.score}`, i===0 ? "ok" : "")}
-            </div>
-            <div style="font-family:var(--mono);font-size:11px;color:#64748b;margin-bottom:8px;">${opt.design.systemType}</div>
-            <div style="font-size:12px;color:#334155;line-height:1.7;">
-              <div>Tonnage: <strong>${fmt(opt.design.aggregate.selectedTR,1)} TR</strong></div>
-              <div>Airflow: <strong>${fmtInt(opt.design.aggregate.totalCfm)} CFM</strong></div>
-              <div>Fan kW: <strong>${fmt(opt.design.fan.motorInputKw,2)}</strong></div>
-              <div>Fan W/CFM: <strong>${fmt(opt.design.fan.wPerCfm,2)}</strong>
-                ${chip(opt.design.fan.ashrae90_1Compliant ? "90.1 ✓" : "90.1 ✗", opt.design.fan.ashrae90_1Compliant ? "ok" : "bad")}</div>
-            </div>
-          </div>
-        `).join("")}
-      </div>
-    `;
+    const sectionTitle = '<div style="margin:0 0 8px 0;font-family:var(--mono);font-size:10.5px;'
+      + 'letter-spacing:.16em;text-transform:uppercase;color:var(--text3);">Ranked alternatives (preferred → least)</div>';
+    const cards = options.map(function (opt, i) {
+      const borderColor = i === 0 ? 'var(--accent)' : 'var(--border2)';
+      return '<div style="border:1px solid ' + borderColor + ';border-radius:10px;padding:14px;'
+        + 'background:var(--bg3);' + (i === 0 ? 'box-shadow:0 0 0 1px rgba(0,201,167,0.18);' : '') + '">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;">'
+        +   '<strong style="font-size:14px;color:var(--text);">' + opt.label + '</strong>'
+        +   chip('Score ' + opt.score, i === 0 ? 'ok' : '')
+        + '</div>'
+        + '<div style="font-family:var(--mono);font-size:10.5px;color:var(--text3);'
+        +   'letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;">'
+        +   opt.design.systemType + '</div>'
+        + '<div style="font-size:12.5px;color:var(--text2);line-height:1.8;font-family:var(--mono);">'
+        +   '<div>Tonnage: <span style="color:var(--text);">' + fmt(opt.design.aggregate.selectedTR, 1) + ' TR</span></div>'
+        +   '<div>Airflow: <span style="color:var(--text);">' + fmtInt(opt.design.aggregate.totalCfm) + ' CFM</span></div>'
+        +   '<div>Fan kW: <span style="color:var(--text);">' + fmt(opt.design.fan.motorInputKw, 2) + '</span></div>'
+        +   '<div>Fan W/CFM: <span style="color:var(--text);">' + fmt(opt.design.fan.wPerCfm, 2) + '</span> '
+        +     chip(opt.design.fan.ashrae90_1Compliant ? '90.1 ✓' : '90.1 ✗',
+                   opt.design.fan.ashrae90_1Compliant ? 'ok' : 'bad')
+        +   '</div>'
+        + '</div></div>';
+    }).join("");
+    return sectionTitle
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">'
+      + cards + '</div>';
   }
 
   function renderAutofix(payload) {
     const ok = payload.success;
     const log = payload.log || [];
-    const logRows = log.map(step =>
-      `<tr>
-        <td style="padding:4px 8px;">${step.iter}</td>
-        <td style="padding:4px 8px;">${(step.fails || []).join(", ") || "<em>none</em>"}</td>
-        <td style="padding:4px 8px;font-family:var(--mono);font-size:11px;">${Object.entries(step.intent || {}).map(([k,v])=>`${k}=${v}`).join("; ")}</td>
-      </tr>`
-    ).join("");
-    return `
-      <div style="margin-bottom:8px;">
-        ${ok ? chip(`Converged in ${payload.iterations} iterations`, "ok")
-             : chip(`Did not converge in ${payload.iterations} iterations`, "warn")}
-      </div>
-      ${renderDesign(payload.design, null)}
-      <h4 style="margin:14px 0 6px 0;font-size:13px;color:#0f172a;">Auto-fix transcript</h4>
-      <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;">
-        <thead style="background:#f1f5f9;"><tr><th style="padding:6px 8px;text-align:left;">Iter</th><th style="padding:6px 8px;text-align:left;">Failing constraints</th><th style="padding:6px 8px;text-align:left;">Intent applied</th></tr></thead>
-        <tbody>${logRows}</tbody>
-      </table></div>
-    `;
+    const tdBase = 'padding:6px 10px;color:var(--text);font-family:var(--mono);'
+      + 'border-bottom:1px solid var(--border);';
+    const thBase = 'padding:8px 10px;text-align:left;color:var(--text3);font-family:var(--mono);'
+      + 'font-size:10px;letter-spacing:.10em;text-transform:uppercase;border-bottom:1px solid var(--border2);';
+    const logRows = log.map(function (step) {
+      return '<tr>'
+        + '<td style="' + tdBase + '">' + step.iter + '</td>'
+        + '<td style="' + tdBase + '">' + ((step.fails || []).join(", ") || '<em style="color:var(--text3);">none</em>') + '</td>'
+        + '<td style="' + tdBase + 'font-size:11px;">'
+        + Object.entries(step.intent || {}).map(function (e) { return e[0] + '=' + e[1]; }).join("; ")
+        + '</td></tr>';
+    }).join("");
+    return ''
+      + '<div style="margin-bottom:8px;">'
+      + (ok
+          ? chip('Converged in ' + payload.iterations + ' iterations', 'ok')
+          : chip('Did not converge in ' + payload.iterations + ' iterations', 'warn'))
+      + '</div>'
+      + renderDesign(payload.design, null)
+      + '<div style="margin:18px 0 8px 0;font-family:var(--mono);font-size:10.5px;'
+      + 'letter-spacing:.16em;text-transform:uppercase;color:var(--text3);">Auto-fix transcript</div>'
+      + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;'
+      + 'background:var(--bg3);border:1px solid var(--border);border-radius:8px;overflow:hidden;">'
+      + '<thead><tr>'
+      +   '<th style="' + thBase + '">Iter</th>'
+      +   '<th style="' + thBase + '">Failing constraints</th>'
+      +   '<th style="' + thBase + '">Intent applied</th>'
+      + '</tr></thead>'
+      + '<tbody>' + logRows + '</tbody></table></div>';
   }
 
   // -----------------------------------------------------------------
