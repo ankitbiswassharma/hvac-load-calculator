@@ -100,6 +100,17 @@ jobs:
             traefik_project_dir="${TRAEFIK_PROJECT_DIR:-/home/webapp/app}"
             traefik_network="${TRAEFIK_NETWORK:-app_default}"
             traefik_dynamic_dir="${TRAEFIK_DYNAMIC_DIR:-${traefik_project_dir}/traefik/dynamic}"
+            wait_for_url() {
+              url="$1"
+              for attempt in $(seq 1 30); do
+                if curl -fsS "$url" > /dev/null; then
+                  return 0
+                fi
+                echo "Waiting for ${url} (${attempt}/30)"
+                sleep 2
+              done
+              curl -fsS "$url" > /dev/null
+            }
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
             docker pull "$image"
             docker tag "$image" hvac-muskit:local
@@ -118,6 +129,6 @@ jobs:
               docker compose -f "$traefik_project_dir/docker-compose.yml" restart traefik
             fi
             docker image prune -f
-            curl -fsS http://127.0.0.1:3000/ > /dev/null
-            curl -fsS https://hvac.muskit.in/ > /dev/null
+            wait_for_url http://127.0.0.1:3000/
+            wait_for_url https://hvac.muskit.in/
             echo "Deploy OK"
