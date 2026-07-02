@@ -43,6 +43,14 @@
   const TERMINAL_RETURN = "rgba(255, 174, 121, 1)";
   const LABEL_COLOR = "rgba(229, 236, 251, 0.96)";
   const GRID_COLOR = "rgba(137, 154, 188, 0.14)";
+  const SYMBOL_TAG_FILL = "rgba(8, 13, 22, 0.88)";
+  const SYMBOL_TAG_STROKE = "rgba(231, 238, 250, 0.32)";
+  const SYMBOL_WALL = "#cbd5e1";
+  const SYMBOL_WINDOW = "#8de4ff";
+  const SYMBOL_AHU = "#d7dee9";
+  const SYMBOL_SUPPLY = "#63b8ff";
+  const SYMBOL_RETURN = "#ff9b84";
+  const SYMBOL_PROCESS = "#ffbd6a";
   const VIEW_PRESETS = {
     iso: { yaw: DEFAULT_YAW, pitch: DEFAULT_PITCH, zoom: DEFAULT_ZOOM, projection: "perspective" },
     top: { yaw: 0, pitch: -Math.PI / 2, zoom: 0.98, projection: "orthographic" },
@@ -1069,28 +1077,28 @@
       point(room.length, 0, room.height),
       shellStyle,
       null,
-      "room-wall"
+      "room-wall-south"
     ));
     objects.push(createBoxObject(
       point(0, room.width, 0),
       point(room.length, room.width + wallThickness, room.height),
       shellStyle,
       null,
-      "room-wall"
+      "room-wall-north"
     ));
     objects.push(createBoxObject(
       point(-wallThickness, 0, 0),
       point(0, room.width, room.height),
       shellStyle,
       null,
-      "room-wall"
+      "room-wall-west"
     ));
     objects.push(createBoxObject(
       point(room.length, 0, 0),
       point(room.length + wallThickness, room.width, room.height),
       shellStyle,
       null,
-      "room-wall"
+      "room-wall-east"
     ));
 
     objects.push(createBoxObject(
@@ -1231,6 +1239,48 @@
         && entry.y >= zone.y0 - 0.01
         && entry.y <= zone.y0 + zone.width + 0.01;
     });
+  }
+
+  function addSymbolTag(scene, anchorPoint, code, label, color, options) {
+    if (!scene || !anchorPoint || !code) {
+      return;
+    }
+    const settings = options || {};
+    scene.symbolTags.push({
+      point: settings.point || anchorPoint,
+      leaderTo: settings.leaderTo || anchorPoint,
+      code: code,
+      label: label || "",
+      color: color || LABEL_COLOR,
+      priority: settings.priority == null ? 2 : settings.priority,
+      minWidth: settings.minWidth || 0
+    });
+  }
+
+  function addDuctSymbolTag(scene, points, section, code, labelPrefix, color, progress, priority) {
+    if (!points || points.length < 2) {
+      return;
+    }
+    const anchor = segmentPoint(points, progress == null ? 0.55 : progress);
+    const lift = Math.max(((section && section.height) || 0.16) * 1.25, 0.22);
+    addSymbolTag(
+      scene,
+      anchor,
+      code,
+      labelPrefix + " " + ((section && section.label) || "visual"),
+      color,
+      {
+        point: point(anchor.x, anchor.y, anchor.z + lift),
+        leaderTo: anchor,
+        priority: priority == null ? 2 : priority,
+        minWidth: 40
+      }
+    );
+  }
+
+  function addTaggedDuctRun(scene, points, section, style, code, labelPrefix, color, progress, priority) {
+    addClosedPolylineBoxes(scene.objects, points, section, style);
+    addDuctSymbolTag(scene, points, section, code, labelPrefix, color, progress, priority);
   }
 
   function buildFallbackZone(result) {
@@ -1399,12 +1449,16 @@
       center: point(length / 2, width / 2, height / 2),
       objects: [],
       labels: [],
+      symbolTags: [],
       particles: [],
       callouts: [],
       supplyColor: "#63b8ff",
       returnColor: "#ff8d7b"
     };
     addRoomShell(scene.objects, scene.room);
+    addSymbolTag(scene, point(length * 0.52, width + wallThickness * 0.72, height * 0.56), "W", "north wall", SYMBOL_WALL, { priority: 1, minWidth: 28 });
+    addSymbolTag(scene, point(length + wallThickness * 0.72, width * 0.52, height * 0.56), "W", "east wall", SYMBOL_WALL, { priority: 1, minWidth: 28 });
+    addSymbolTag(scene, point(length * 0.5, width * 0.5, 0.07), "FLR", "floor slab", SYMBOL_WALL, { priority: 3, minWidth: 34 });
 
     const envelope = (result && result.envelope) || {};
     const windows = Array.isArray(envelope.windows) ? envelope.windows : [];
@@ -1470,6 +1524,14 @@
           max = point(0.01, clamp(centerAlong + panelWidth / 2, panelWidth + 0.15, width - 0.15), headZ);
         }
         addWindowAssembly(scene.objects, min, max, wall);
+        addSymbolTag(
+          scene,
+          point((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2),
+          "WIN",
+          wall + " window",
+          SYMBOL_WINDOW,
+          { priority: 1, minWidth: 42 }
+        );
         cursor += panelWidth + gap;
       });
     });
@@ -1513,6 +1575,14 @@
           moduleHeight
         );
         addAhuUnit(scene.objects, min, max);
+        addSymbolTag(
+          scene,
+          point(moduleCenterX, moduleCenterY, moduleHeight + 0.22),
+          "AHU",
+          ((cluster.selection && cluster.selection.ahu && cluster.selection.ahu.model) || cluster.name || "air handling unit"),
+          SYMBOL_AHU,
+          { priority: 0, minWidth: 44 }
+        );
         scene.labels.push({
           point: point(moduleCenterX, moduleCenterY, moduleHeight + 0.1),
           text: cluster.name + " · AHU " + position.index,
@@ -1533,7 +1603,7 @@
         point(headerAnchorX, 0, ahuTopZ),
         point(headerAnchorX, 0, supplySpineZ)
       ];
-      addClosedPolylineBoxes(scene.objects, supplyHeaderPath, aggregateSupplySection, {
+      addTaggedDuctRun(scene, supplyHeaderPath, aggregateSupplySection, {
         topFill: SUPPLY_TOP,
         sideFill: SUPPLY_SIDE,
         sideFillAlt: "rgba(18, 66, 116, 0.99)",
@@ -1541,14 +1611,14 @@
         frontFillAlt: "rgba(30, 94, 159, 0.99)",
         bottomFill: "rgba(16, 49, 92, 0.98)",
         stroke: "rgba(180, 226, 255, 0.28)"
-      });
+      }, "SA-M", "main supply duct", SYMBOL_SUPPLY, 0.68, 0);
 
       const returnHeaderPath = [
         point(headerAnchorX, 0, returnSpineZ),
         point(headerAnchorX, headerAnchorY, returnSpineZ),
         point(headerAnchorX, headerAnchorY, ahuInletZ)
       ];
-      addClosedPolylineBoxes(scene.objects, returnHeaderPath, aggregateReturnSection, {
+      addTaggedDuctRun(scene, returnHeaderPath, aggregateReturnSection, {
         topFill: RETURN_TOP,
         sideFill: RETURN_SIDE,
         sideFillAlt: "rgba(130, 71, 76, 0.99)",
@@ -1556,7 +1626,7 @@
         frontFillAlt: "rgba(160, 90, 84, 0.99)",
         bottomFill: "rgba(120, 64, 70, 0.98)",
         stroke: "rgba(255, 225, 219, 0.28)"
-      });
+      }, "RA-M", "main return duct", SYMBOL_RETURN, 0.35, 0);
 
       zoneList.forEach(function (zone) {
         const zoneCenterPoint = zoneCenter(zone);
@@ -1577,7 +1647,7 @@
           point(zoneCenterPoint.x, 0, supplySpineZ),
           point(zoneCenterPoint.x, zoneCenterPoint.y, supplySpineZ)
         ];
-        addClosedPolylineBoxes(scene.objects, supplyPath, zoneSupplySection, {
+        addTaggedDuctRun(scene, supplyPath, zoneSupplySection, {
           topFill: SUPPLY_TOP,
           sideFill: SUPPLY_SIDE,
           sideFillAlt: "rgba(18, 66, 116, 0.99)",
@@ -1585,7 +1655,7 @@
           frontFillAlt: "rgba(30, 94, 159, 0.99)",
           bottomFill: "rgba(16, 49, 92, 0.98)",
           stroke: "rgba(180, 226, 255, 0.28)"
-        });
+        }, "SA-M", "zone supply main", SYMBOL_SUPPLY, 0.72, 1);
         addJunctionBox(scene.objects, point(zoneCenterPoint.x, zoneCenterPoint.y, supplySpineZ), zoneSupplySection, {
           topFill: SUPPLY_TOP,
           sideFill: SUPPLY_SIDE,
@@ -1607,6 +1677,16 @@
           const branchStep = zoneSupplies.length > 24 ? 2 : 1;
           zoneSupplies.forEach(function (supplyPoint, supplyIndex) {
             addDiffuserAssembly(scene.objects, supplyPoint, supplyTerminalZ);
+            if (supplyIndex < 4) {
+              addSymbolTag(
+                scene,
+                point(supplyPoint.x, supplyPoint.y, supplyTerminalZ + 0.08),
+                "SD",
+                (layout.supplyDeviceType || "supply diffuser"),
+                SYMBOL_SUPPLY,
+                { priority: 2, minWidth: 34 }
+              );
+            }
             scene.particles.push({
               points: [
                 point(supplyPoint.x, supplyPoint.y, supplyTerminalZ - 0.01),
@@ -1624,7 +1704,7 @@
                 point(supplyPoint.x, supplyPoint.y, supplySpineZ),
                 point(supplyPoint.x, supplyPoint.y, supplyTerminalZ)
               ];
-              addClosedPolylineBoxes(scene.objects, branchPoints, branchSection, {
+              const branchStyle = {
                 topFill: "rgba(78, 188, 255, 0.95)",
                 sideFill: "rgba(23, 75, 129, 0.98)",
                 sideFillAlt: "rgba(18, 61, 104, 0.98)",
@@ -1632,7 +1712,12 @@
                 frontFillAlt: "rgba(42, 108, 176, 0.98)",
                 bottomFill: "rgba(14, 44, 84, 0.96)",
                 stroke: "rgba(180, 226, 255, 0.24)"
-              });
+              };
+              if (supplyIndex === 0) {
+                addTaggedDuctRun(scene, branchPoints, branchSection, branchStyle, "SA-B", "branch supply duct", SYMBOL_SUPPLY, 0.62, 3);
+              } else {
+                addClosedPolylineBoxes(scene.objects, branchPoints, branchSection, branchStyle);
+              }
               addJunctionBox(scene.objects, branchPoints[0], branchSection, {
                 topFill: "rgba(78, 188, 255, 0.95)",
                 sideFill: "rgba(23, 75, 129, 0.98)",
@@ -1663,7 +1748,7 @@
           point(headerAnchorX, zoneReturnY, returnSpineZ),
           point(headerAnchorX, 0, returnSpineZ)
         ];
-        addClosedPolylineBoxes(scene.objects, returnPath, zoneReturnSection, {
+        addTaggedDuctRun(scene, returnPath, zoneReturnSection, {
           topFill: RETURN_TOP,
           sideFill: RETURN_SIDE,
           sideFillAlt: "rgba(130, 71, 76, 0.99)",
@@ -1671,7 +1756,7 @@
           frontFillAlt: "rgba(160, 90, 84, 0.99)",
           bottomFill: "rgba(120, 64, 70, 0.98)",
           stroke: "rgba(255, 225, 219, 0.28)"
-        });
+        }, "RA-M", "zone return main", SYMBOL_RETURN, 0.38, 1);
         addJunctionBox(scene.objects, collectorPoint, zoneReturnSection, {
           topFill: RETURN_TOP,
           sideFill: RETURN_SIDE,
@@ -1720,6 +1805,16 @@
             grilleMax = point(returnPoint.x + 0.18, returnPoint.y + 0.18, returnZ + 0.01);
           }
           addReturnGrilleAssembly(scene.objects, grilleMin, grilleMax, grilleOrientation);
+          if (returnIndex < 6) {
+            addSymbolTag(
+              scene,
+              point(returnPoint.x, returnPoint.y, returnZ + 0.08),
+              "RG",
+              (layout.returns && layout.returns.type) || "return grille",
+              SYMBOL_RETURN,
+              { priority: 2, minWidth: 34 }
+            );
+          }
           if (returnIndex % 2 === 0) {
             const returnBranchPoints = [
               collectorPoint,
@@ -1727,7 +1822,7 @@
               point(returnPoint.x, returnPoint.y, returnSpineZ),
               point(returnPoint.x, returnPoint.y, returnZ)
             ];
-            addClosedPolylineBoxes(scene.objects, returnBranchPoints, branchSection, {
+            const returnBranchStyle = {
               topFill: "rgba(255, 174, 121, 0.95)",
               sideFill: "rgba(128, 72, 78, 0.98)",
               sideFillAlt: "rgba(112, 63, 69, 0.98)",
@@ -1735,7 +1830,12 @@
               frontFillAlt: "rgba(166, 95, 84, 0.98)",
               bottomFill: "rgba(99, 55, 61, 0.96)",
               stroke: "rgba(255, 225, 219, 0.24)"
-            });
+            };
+            if (returnIndex === 0) {
+              addTaggedDuctRun(scene, returnBranchPoints, branchSection, returnBranchStyle, "RA-B", "branch return duct", SYMBOL_RETURN, 0.62, 3);
+            } else {
+              addClosedPolylineBoxes(scene.objects, returnBranchPoints, branchSection, returnBranchStyle);
+            }
             addJunctionBox(scene.objects, returnBranchPoints[0], branchSection, {
               topFill: "rgba(255, 174, 121, 0.95)",
               sideFill: "rgba(128, 72, 78, 0.98)",
@@ -1780,6 +1880,16 @@
                 stroke: "rgba(255, 228, 182, 0.16)"
               }
             ));
+            if (deviceIndex < 4) {
+              addSymbolTag(
+                scene,
+                point(exhaustX, exhaustY, height - 0.08),
+                "EXH",
+                "distributed exhaust",
+                SYMBOL_PROCESS,
+                { priority: 2, minWidth: 40 }
+              );
+            }
             scene.particles.push({
               points: [
                 point(zoneCenterPoint.x, zoneCenterPoint.y, Math.max(occupiedZ, 0.9)),
@@ -2157,6 +2267,21 @@
     }
   }
 
+  function drawRoundedRect(ctx, x, y, width, height, radius) {
+    const safeRadius = Math.min(Math.max(radius || 0, 0), Math.min(width, height) / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + safeRadius, y);
+    ctx.lineTo(x + width - safeRadius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+    ctx.lineTo(x + width, y + height - safeRadius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+    ctx.lineTo(x + safeRadius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+    ctx.lineTo(x, y + safeRadius);
+    ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+    ctx.closePath();
+  }
+
   function polygonSignedArea(points) {
     if (!points || points.length < 3) {
       return 0;
@@ -2181,6 +2306,8 @@
         || object.layer === "room-trim-high"
         || object.layer === "room-floor-shell"
         || object.layer === "room-trim-low"
+        || object.layer === "room-wall-south"
+        || object.layer === "room-wall-west"
       ) {
         return false;
       }
@@ -2189,7 +2316,7 @@
       if (object.layer === "room-ceiling-shell" || object.layer === "room-floor-shell") {
         return false;
       }
-      if (object.layer === "room-wall" && object.max && object.max.y <= 0.001) {
+      if (object.layer === "room-wall-south" || object.layer === "room-wall-west") {
         return false;
       }
       if (object.layer === "room-trim-low" && object.max && object.max.y <= 0.14) {
@@ -2435,6 +2562,90 @@
     });
   }
 
+  function drawSymbolTags(instance, scene) {
+    const ctx = instance.ctx;
+    const tags = Array.isArray(scene.symbolTags) ? scene.symbolTags : [];
+    if (!tags.length) {
+      return;
+    }
+
+    const visibleTags = tags.map(function (tag) {
+      return {
+        tag: tag,
+        projected: projectPoint(instance, scene, tag.point),
+        leader: tag.leaderTo ? projectPoint(instance, scene, tag.leaderTo) : null
+      };
+    }).filter(function (entry) {
+      return entry.projected.x > -120
+        && entry.projected.x < instance.width + 120
+        && entry.projected.y > -90
+        && entry.projected.y < instance.height + 90;
+    }).sort(function (left, right) {
+      const priorityDelta = (left.tag.priority || 0) - (right.tag.priority || 0);
+      if (priorityDelta) {
+        return priorityDelta;
+      }
+      return left.projected.depth - right.projected.depth;
+    });
+
+    const maxTags = instance.width < 680 ? 22 : 52;
+    visibleTags.slice(0, maxTags).forEach(function (entry) {
+      const tag = entry.tag;
+      const projected = entry.projected;
+      const code = String(tag.code || "").toUpperCase();
+      const label = String(tag.label || "");
+      const showLabel = instance.width >= 860 && label && (tag.priority || 0) <= 1;
+      const tagHeight = 24;
+      const codePadding = 9;
+      const gap = showLabel ? 6 : 0;
+      ctx.save();
+      ctx.font = "700 10px IBM Plex Mono, monospace";
+      const codeWidth = Math.max(ctx.measureText(code).width + codePadding * 2, tag.minWidth || 32);
+      ctx.font = "500 10px IBM Plex Mono, monospace";
+      const labelWidth = showLabel ? Math.min(ctx.measureText(label).width + 14, 170) : 0;
+      const totalWidth = codeWidth + gap + labelWidth;
+      let x = projected.x - totalWidth / 2;
+      let y = projected.y - tagHeight - 7;
+      x = clamp(x, 8, Math.max(8, instance.width - totalWidth - 8));
+      y = clamp(y, 8, Math.max(8, instance.height - tagHeight - 8));
+
+      if (entry.leader) {
+        ctx.beginPath();
+        ctx.moveTo(entry.leader.x, entry.leader.y);
+        ctx.lineTo(x + codeWidth / 2, y + tagHeight);
+        ctx.strokeStyle = colorWithAlpha(tag.color || LABEL_COLOR, 0.58);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      drawRoundedRect(ctx, x, y, codeWidth, tagHeight, 5);
+      ctx.fillStyle = SYMBOL_TAG_FILL;
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = tag.color || SYMBOL_TAG_STROKE;
+      ctx.stroke();
+      ctx.fillStyle = tag.color || LABEL_COLOR;
+      ctx.font = "700 10px IBM Plex Mono, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(code, x + codeWidth / 2, y + tagHeight / 2 + 0.5);
+
+      if (showLabel) {
+        drawRoundedRect(ctx, x + codeWidth + gap, y, labelWidth, tagHeight, 5);
+        ctx.fillStyle = "rgba(12, 18, 28, 0.74)";
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(231, 238, 250, 0.18)";
+        ctx.stroke();
+        ctx.fillStyle = "rgba(231, 238, 250, 0.88)";
+        ctx.font = "500 10px IBM Plex Mono, monospace";
+        ctx.textAlign = "left";
+        ctx.fillText(label.length > 28 ? label.slice(0, 25) + "..." : label, x + codeWidth + gap + 7, y + tagHeight / 2 + 0.5);
+      }
+      ctx.restore();
+    });
+  }
+
   function drawPlaceholder(instance) {
     const ctx = instance.ctx;
     ctx.setTransform(instance.dpr, 0, 0, instance.dpr, 0, 0);
@@ -2486,6 +2697,7 @@
     drawObjects(instance, instance.scene);
     drawParticles(instance, instance.scene);
     drawLabels(instance, instance.scene);
+    drawSymbolTags(instance, instance.scene);
   }
 
   function frame(instance, timestamp) {

@@ -44,30 +44,67 @@
   // Build an ASHRAE engine project from the active room's inputs.
   // -----------------------------------------------------------------
   function buildProjectFromRoom(room, result) {
+    // IMPORTANT: the calculator form uses short input ids (len, wid, ht, occ,
+    // out_dbt, in_dbt, win_area, ...). The previous version of this mapper
+    // read long names (inputs.height, inputs.occupants, inputs.outdoor_db)
+    // that never existed, so every AI design request silently used generic
+    // defaults instead of the user's actual room. All reads below use the
+    // real ids first, with the legacy names kept as fallbacks.
     const inputs = (result && result.inputs) || {};
-    const area = Number(inputs.area || result.area || 25);
-    const height = Number(inputs.height || result.ceilingHeight || 3.0);
+    const numOr = function (value, fallback) {
+      const parsed = parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const length = numOr(inputs.len, 0);
+    const width = numOr(inputs.wid, 0);
+    const area = (length > 0 && width > 0) ? length * width : numOr(inputs.area, numOr(result && result.area, 25));
+    const height = numOr(inputs.ht, numOr(inputs.height, 3.0));
 
-    // Climate — use whatever is in the inputs; fall back to Mumbai design day.
+    // Climate — from the actual form fields; fall back to Indian design day.
     const climate = {
-      latitudeDeg:      Number(inputs.latitude || 19.0),
-      longitudeDeg:     Number(inputs.longitude || 72.8),
-      stdMeridianDeg:   Number(inputs.std_meridian_deg || 82.5),
-      designOutdoorDbC: Number(inputs.outdoor_db || 35),
-      designOutdoorWbC: Number(inputs.outdoor_wb || 28),
-      designDayOfYear:  Number(inputs.design_day_of_year || 172),
-      designClockHour:  Number(inputs.design_clock_hour || 15),
-      elevationM:       Number(inputs.elevation_m || 14)
+      latitudeDeg:      numOr(inputs.out_lat, numOr(inputs.latitude, 19.0)),
+      longitudeDeg:     numOr(inputs.out_long, numOr(inputs.longitude, 72.8)),
+      stdMeridianDeg:   numOr(inputs.std_meridian_deg, 82.5),
+      designOutdoorDbC: numOr(inputs.out_dbt, numOr(inputs.outdoor_db, 35)),
+      designOutdoorWbC: numOr(inputs.out_wbt, numOr(inputs.outdoor_wb, 28)),
+      designDayOfYear:  numOr(inputs.solar_day, numOr(inputs.design_day_of_year, 172)),
+      designClockHour:  numOr(inputs.solar_hour, numOr(inputs.design_clock_hour, 15)),
+      elevationM:       numOr(inputs.out_elev, numOr(inputs.elevation_m, 14))
     };
 
-    // Walls — if the form has per-orientation areas, use them; otherwise
-    // distribute envelope evenly across S and W (worst-case exposure).
-    const perimeter = 2 * (Math.sqrt(area) + Math.sqrt(area));
-    const wallArea = perimeter * height;
+    // Occupant activity: form ids → engine activity keys (nearest ASHRAE
+    // Ch.18 Table 1 rate).
+    const activityMap = {
+      seated_rest: "seated_quiet",     // 100 W
+      seated_light: "seated_office",   // 115 W
+      standing_light: "seated_eating", // ~130→145 W nearest
+      walking: "light_industry"        // ~165→220 W nearest (walking/light bench)
+    };
+    const activity = activityMap[inputs.occ_act] || inputs.activity_level || "seated_office";
+
+    // Walls — use the real room perimeter and the exposed-wall count from
+    // the form (wall_exp: 1–4 exposed walls), net of glazing.
+    const perimeter = (length > 0 && width > 0)
+      ? 2 * (length + width)
+      : 4 * Math.sqrt(area);
+    const exposedFraction = Math.min(Math.max(numOr(inputs.wall_exp, 2), 1), 4) / 4;
+    const windowArea = Math.max(numOr(inputs.win_area, numOr(inputs.window_area_m2, 0)), 0);
+    const wallArea = Math.max(perimeter * height * exposedFraction - windowArea, 0);
+    const wallU = numOr(inputs.u_wall, 0.5);
     const walls = [
-      { area: wallArea * 0.5, U: Number(inputs.u_wall || 0.5), orientation: "S", alpha: 0.6 },
-      { area: wallArea * 0.5, U: Number(inputs.u_wall || 0.5), orientation: "W", alpha: 0.6 }
+      { area: wallArea * 0.5, U: wallU, orientation: "S", alpha: 0.6 },
+      { area: wallArea * 0.5, U: wallU, orientation: "W", alpha: 0.6 }
     ];
+
+    // Safety factor: the form stores sf as a PERCENT (e.g. 10), the engine
+    // expects a multiplier (e.g. 1.10).
+    const sfPercent = numOr(inputs.sf, NaN);
+    const safetyFactor = Number.isFinite(sfPercent) && sfPercent >= 1
+      ? 1 + Math.min(Math.max(sfPercent, 0), 50) / 100
+      : numOr(inputs.safety_factor, 1.10);
+
+    const roofExposed = String(inputs.roof_exp || "top_floor") !== "ground"
+      && inputs.is_top_floor !== false;
 
     const project = {
       name: (room && room.name) || "Active room",
@@ -75,34 +112,40 @@
       rooms: [{
         name: (room && room.name) || "Room 1",
         areaM2: area, ceilingHeightM: height,
-        occupants: Number(inputs.occupants || result.occupants || 4),
-        activity: inputs.activity_level || "seated_office",
-        lpd: Number(inputs.lpd_w_per_m2 || 10),
-        epd: Number(inputs.epd_w_per_m2 || 12),
-        equipmentUsage: Number(inputs.equipment_usage || 0.7),
+        occupants: numOr(inputs.occ, numOr(inputs.occupants, 4)),
+        activity: activity,
+        lpd: numOr(inputs.lighting, numOr(inputs.lpd_w_per_m2, 10)),
+        epd: numOr(inputs.equip, numOr(inputs.epd_w_per_m2, 12)),
+        equipmentUsage: numOr(inputs.div_equip, numOr(inputs.equipment_usage, 0.8)),
         walls: walls,
-        roof: inputs.is_top_floor !== false
-          ? { area: area, U: Number(inputs.u_roof || 0.3), alpha: 0.85, dR: 63 }
+        roof: roofExposed
+          ? { area: area, U: numOr(inputs.u_roof, 0.3), alpha: 0.85, dR: 63 }
           : null,
-        windows: inputs.window_area_m2 ? [{
-          area: Number(inputs.window_area_m2),
-          U: Number(inputs.u_window || 2.8),
-          shgcN: Number(inputs.shgc || 0.4),
-          orientation: inputs.window_orientation || "S"
+        windows: windowArea > 0 ? [{
+          area: windowArea,
+          U: numOr(inputs.u_window, 2.8),
+          // form captures a shading coefficient (sc_glass); engine converts
+          // SC → SHGC internally when shgcN is not supplied.
+          sc: numOr(inputs.sc_glass, NaN) || undefined,
+          shgcN: Number.isFinite(parseFloat(inputs.shgc)) ? parseFloat(inputs.shgc) : undefined,
+          orientation: inputs.win_orient || inputs.window_orientation || "S"
         }] : [],
-        infiltrationAch: Number(inputs.infiltration_ach || result.infiltrationAch || 0.4),
-        ventilationCfmPerPerson: Number(inputs.vent_cfm_per_person || 5),
-        ventilationCfmPerM2: Number(inputs.vent_cfm_per_m2 || 0.6),
-        supplyTempC: Number(inputs.supply_temp_c || 13),
-        setpointC: Number(inputs.indoor_db || 24),
-        setpointRhPct: Number(inputs.indoor_rh || 50),
-        safetyFactor: Number(inputs.safety_factor || 1.10)
+        infiltrationAch: numOr(inputs.infiltration_ach, numOr(result && result.infiltration_ach, 0.4)),
+        ventilationCfmPerPerson: numOr(inputs.fresh_cfm, numOr(inputs.vent_cfm_per_person, 5)),
+        ventilationCfmPerM2: numOr(inputs.vent_cfm_per_m2, 0.3),
+        supplyTempC: numOr(
+          result && result.airflowBasis && result.airflowBasis.supplyTempDesign,
+          numOr(inputs.supply_temp_c, 13)
+        ),
+        setpointC: numOr(inputs.in_dbt, numOr(inputs.indoor_db, 24)),
+        setpointRhPct: numOr(inputs.in_rh, numOr(inputs.indoor_rh, 50)),
+        safetyFactor: safetyFactor
       }],
       designIntent: {
         systemType:      inputs.system_type || "vrf",
-        fanEfficiency:   Number(inputs.fan_efficiency || 0.65),
+        fanEfficiency:   numOr(inputs.fan_efficiency, 0.65),
         motorEfficiency: 0.92,
-        externalSpPa:    Number(inputs.total_esp_pa || 500),
+        externalSpPa:    numOr(result && result.total_esp, numOr(inputs.total_esp_pa, 500)),
         diversityFactor: 1.0
       }
     };

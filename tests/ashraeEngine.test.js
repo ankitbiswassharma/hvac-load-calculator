@@ -108,11 +108,14 @@ test("infiltration sensible load (10 m³, 1 ACH, 40→24 C)", () => {
   assert.ok(out.latent > 0, "should have positive latent at higher humidity");
 });
 
-test("occupant load: 10 office occupants → 1170 W total", () => {
+// ASHRAE 2017 Fundamentals Ch.18 Table 1 at 24 °C room temp:
+// seated_office = 115 W total (65 W sensible + 50 W latent).
+// Prior test used 117/65/52 (old incorrect split); corrected to 115/65/50.
+test("occupant load: 10 office occupants → 1150 W total (ASHRAE Ch.18 Table 1)", () => {
   const r = loads.occupantLoad({ activity: "seated_office", count: 10 });
-  assert.strictEqual(r.total, 1170);
+  assert.strictEqual(r.total, 1150);
   assert.strictEqual(r.sensible, 650);
-  assert.strictEqual(r.latent, 520);
+  assert.strictEqual(r.latent, 500);
 });
 
 test("window solar gain peaks east at 9 AM, west at 3 PM (Mumbai June)", () => {

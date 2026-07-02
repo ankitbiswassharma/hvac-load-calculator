@@ -25,25 +25,48 @@ jobs:
       - name: Install dependencies
         run: npm ci || npm install
 
+      - name: Syntax-check browser bundles
+        # These files are browser IIFEs that node --test never loads, so a
+        # syntax error in them would otherwise reach production unnoticed.
+        run: |
+          for f in hvacPlatform.js engineeringCore.js optimizationEngine.js \
+                   equipmentEngine.js diffuserLayout.js solarEngine.js \
+                   costingEngine.js schematic3d.js aiDesignerUI.js \
+                   apiClient.js authManager.js projectManager.js \
+                   psychroChart.js climateData.js emailService.js; do
+            node --check "$f"
+            echo "ok: $f"
+          done
+
       - name: Run unit tests
         run: npm test
 
   python:
-    name: Python engine tests
+    name: Python energy engine
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Compile all engine modules
+        run: python -m compileall -q engine/
+
       - name: Smoke import
         run: |
-          python -c "from engine.energy import bin_data, load_profile, equipment_model; print('ok')"
+          python -c "from engine.energy import bin_data, load_profile, equipment_model, energy_calc, report, cli; print('imports ok')"
+
+      - name: Energy CLI end-to-end (same contract server.js uses)
+        run: |
+          echo '{"system_data":{"peak_load_kw":40,"design_outdoor_temp_c":42,"indoor_setpoint_c":24,"conditioned_airflow_cfm":4500,"process_airflow_cfm":800,"peak_conditioned_fan_kw":3.2,"process_fan_static_pa":220,"tariff_per_kwh":8.5}}' \
+            | python -m engine.energy.cli simulate \
+            | python -c "import json,sys; r=json.load(sys.stdin); assert r['ok'] is True; assert r['report']['annual_energy_kwh'] > 0; print('cli ok — annual kWh:', round(r['report']['annual_energy_kwh']))"
 
   docker:
     name: Docker build
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test, python]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx

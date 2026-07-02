@@ -3,6 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "description": "Musk-IT HVAC design platform with server-backed auth and per-user project storage",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ankitbiswassharma/hvac-load-calculator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ankitbiswassharma/hvac-load-calculator/issues"
+  },
+  "homepage": "https://github.com/ankitbiswassharma/hvac-load-calculator#readme",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node --test",

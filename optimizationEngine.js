@@ -1133,7 +1133,17 @@
 	    let energyReport = normalizeEnergyReport(result.finalEnergyResult || result.energySimulation);
 
     if (!energyReport && typeof settings.simulateEnergy === "function") {
-      energyReport = normalizeEnergyReport(await settings.simulateEnergy(result, systemState.roomContext, systemState));
+      try {
+        energyReport = normalizeEnergyReport(await settings.simulateEnergy(result, systemState.roomContext, systemState));
+      } catch (energyErr) {
+        // Energy simulation failed (server down, timeout, or payload mismatch).
+        // Do NOT reject the scenario — let it continue with null annual energy
+        // so the proxy objective (fan kW / ESP) still drives ranking.
+        result.energySimulationStatus = "error";
+        result.energySimulationError = energyErr && energyErr.message
+          ? energyErr.message
+          : "Energy simulation unavailable for this optimization scenario.";
+      }
     }
 
 	    if (energyReport) {
@@ -1744,7 +1754,11 @@
         fan_power_recirculation: outputs ? outputs.fanPowerKw.recirculation : null,
         fan_power_ventilation: outputs ? outputs.fanPowerKw.ventilation : null,
         cooling_tr: outputs ? outputs.equipmentSizing.trCoolingCoil : null,
+        // energy_annual is null when the server energy simulation was skipped or
+        // failed — ranking then uses the proxy objective internally, but the
+        // display shows "—" to be honest about the data source.
         energy_annual: outputs ? outputs.energy.annualKwh : null,
+        energy_simulated: !!(outputs && outputs.energy.annualKwh != null),
         energy_cost_annual: costEstimate && Number.isFinite(costEstimate.annualEnergyCostInr)
           ? costEstimate.annualEnergyCostInr
           : outputs ? outputs.energy.annualCost : null,
@@ -2011,6 +2025,14 @@
       }
     }
 
+    // strictEnergy: true — only scenarios with a real server annual-energy
+    // simulation result participate in energy-efficiency ranking.  Scenarios
+    // where the server was unavailable still appear in scenarioResults (with
+    // null energy_annual shown as "—") and their fan-kW / ESP values, which
+    // are computed locally from the scenario-specific pressure adjustments,
+    // still differ visibly from the base and from each other.
+    // The physics-based calculationId (set in buildEnergySimulationPayload)
+    // prevents the server from returning a cached result for every scenario.
     let evaluated = evaluateScenarios({
       baseResult: baseEntry.result,
       baseSummary: baseEntry.summary,

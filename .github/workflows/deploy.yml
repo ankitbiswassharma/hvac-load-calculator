@@ -1,6 +1,7 @@
 name: Deploy to hvac.muskit.in
 
-# Triggered manually OR on push to main after CI passes.
+# Manual dispatch OR push to main. The test job below is a hard gate:
+# nothing is built or shipped unless the full suite passes first.
 on:
   push:
     branches: [main]
@@ -11,8 +12,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    name: Test gate (must pass before deploy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Energy CLI smoke test
+        run: |
+          echo '{"system_data":{"peak_load_kw":40,"design_outdoor_temp_c":42,"indoor_setpoint_c":24,"conditioned_airflow_cfm":4500,"process_airflow_cfm":800,"peak_conditioned_fan_kw":3.2,"process_fan_static_pa":220,"tariff_per_kwh":8.5}}' \
+            | python -m engine.energy.cli simulate \
+            | python -c "import json,sys; r=json.load(sys.stdin); assert r['ok'] is True and r['report']['annual_energy_kwh'] > 0; print('cli ok')"
+
   build-and-push:
     name: Build & push image to GHCR
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

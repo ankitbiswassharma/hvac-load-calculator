@@ -19,11 +19,17 @@
   const MAX_VELOCITY_SUPPLY_MPS = 10;
   const MAX_VELOCITY_RETURN_MPS = 7;
   const MAX_VELOCITY_EXHAUST_MPS = 12;
+  // ASHRAE 2017 Fundamentals Ch.18 Table 1 — adjusted heat gain per person
+  // at 24 °C (75 °F) room temperature. Values in Watts.
+  //   seated_rest    = seated quiet (theater/classroom)   100 W total
+  //   seated_light   = seated, very light (office/hotel)  115 W total
+  //   standing_light = standing/walking, light (retail)   130 W total
+  //   walking        = walking, moderate pace             165 W total
   const OCCUPANT_LOADS = {
-    seated_rest: { sensible: 60, latent: 45 },
-    seated_light: { sensible: 70, latent: 45 },
-    standing_light: { sensible: 75, latent: 55 },
-    walking: { sensible: 90, latent: 75 }
+    seated_rest:    { sensible: 60, latent: 40 },   // theater/classroom  (was: L=45, under-latent)
+    seated_light:   { sensible: 65, latent: 50 },   // office — 115 W, ASHRAE 2017 Table 1 (was 70S+45L)
+    standing_light: { sensible: 75, latent: 55 },   // retail/dept store  ✓
+    walking:        { sensible: 90, latent: 75 }    // walking, moderate  ✓
   };
   const CLTD_WALL = { 1: 15, 2: 18, 3: 21, 4: 24 };
   // ASHRAE 1989 HOF Table 30, Roof No. 7 (medium-mass concrete + insulation,
@@ -78,7 +84,9 @@
     "occ_act",
     "fresh_cfm",
     "lighting",
+    "clf_lighting",
     "equip",
+    "div_equip",
     "out_dbt",
     "out_wbt",
     "out_rh",
@@ -150,7 +158,9 @@
     occ_act: "seated_light",
     fresh_cfm: "15",
     lighting: "12",
+    clf_lighting: "0.90",
     equip: "15",
+    div_equip: "0.80",
     out_dbt: "40",
     out_wbt: "26",
     out_rh: "50",
@@ -4117,13 +4127,13 @@
   function canvasImageMarkup(id, alt) {
     const canvas = byId(id);
     if (!canvas || typeof canvas.toDataURL !== "function") {
-      return '<p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Graphic unavailable</p>';
+      return '<p style="color:#94a3b8;font-family:\'JetBrains Mono\',monospace;font-size:12px;">Graphic unavailable</p>';
     }
     try {
       const src = canvas.toDataURL("image/png");
       return '<div class="report-visual"><img src="' + src + '" alt="' + escapeHtml(alt || "Visualization") + '" style="display:block;width:100%;height:auto;border-radius:8px;"></div>';
     } catch (error) {
-      return '<p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Graphic unavailable</p>';
+      return '<p style="color:#94a3b8;font-family:\'JetBrains Mono\',monospace;font-size:12px;">Graphic unavailable</p>';
     }
   }
 
@@ -4310,10 +4320,10 @@
 
   function espRowMarkup(name, qty, unit, total, category) {
     const categoryColor = category === "DUCT"
-      ? "var(--accent2)"
+      ? "#2563eb"
       : category === "FITTING"
-        ? "var(--accent3)"
-        : "var(--accent5)";
+        ? "#d97706"
+        : "#7c3aed";
     return '<div class="esp-row">'
       + '<div class="esp-cell">' + name + "</div>"
       + '<div class="esp-cell">' + qty + "</div>"
@@ -4476,7 +4486,13 @@
     const occupants = parseFloat(inputs.occ) || 0;
     const freshAirPerPerson = parseFloat(inputs.fresh_cfm) || 0;
     const lightingLoad = parseFloat(inputs.lighting) || 0;
+    // ASHRAE Table 18.2: CLF for lighting accounts for hours of operation
+    // and thermal storage. 0.90 = 10h-on, medium-weight construction.
+    const lightingClf = Math.min(Math.max(parseFloat(inputs.clf_lighting) || 0.90, 0.4), 1.0);
     const equipmentLoad = parseFloat(inputs.equip) || 0;
+    // Equipment diversity: fraction of rated load actually running simultaneously.
+    // ASHRAE recommends 0.75–0.90 for office spaces; 0.80 is a typical default.
+    const equipDiversity = Math.min(Math.max(parseFloat(inputs.div_equip) || 0.80, 0.1), 1.0);
     const roofExposure = inputs.roof_exp || "top_floor";
     const outdoorDryBulb = parseFloat(inputs.out_dbt) || 40;
     const outdoorWetBulb = parseFloat(inputs.out_wbt) || 26;
@@ -4507,8 +4523,8 @@
     const occupantLoad = OCCUPANT_LOADS[inputs.occ_act || "seated_light"] || OCCUPANT_LOADS.seated_light;
     const peopleSensible = occupants * occupantLoad.sensible;
     const peopleLatent = occupants * occupantLoad.latent;
-    const lightingSensible = area * lightingLoad * 0.9;
-    const equipmentSensible = area * equipmentLoad * 0.8;
+    const lightingSensible = area * lightingLoad * lightingClf;
+    const equipmentSensible = area * equipmentLoad * equipDiversity;
 
     const solarOptions = {
       glassSHGC: shadingCoefficient,
@@ -4590,9 +4606,16 @@
     const svOut = moistAirSpecificVolume(outdoorDryBulb, wOut, pressurePa);
     const svIn = moistAirSpecificVolume(indoorDryBulb, wIn, pressurePa);
     const freshAirMassFlowDa = safeDiv(freshAirM3S, svOut, 0);
-    const ventCp = 1.006 + 1.86 * ((wOut + wIn) / 2);
+    // ASHRAE Fundamentals Ch.1: cp_moist = 1.006 + 1.86·W kJ/(kg_da·K).
+    // For outdoor-air / infiltration sensible load the air enters at the
+    // OUTDOOR state, so cp must be evaluated at wOut (not an average of
+    // indoor + outdoor). Using an average under-estimates cp for humid
+    // climates where wOut >> wIn and incorrectly inflates the derived
+    // latent component. Total load is always computed from the exact
+    // enthalpy difference; sensible uses the corrected cp.
+    const cpOa = 1.006 + 1.86 * wOut;
     const freshAirTotal = freshAirMassFlowDa * (hOut - hIn) * 1000;
-    const freshAirSensible = freshAirMassFlowDa * ventCp * (outdoorDryBulb - indoorDryBulb) * 1000;
+    const freshAirSensible = freshAirMassFlowDa * cpOa * (outdoorDryBulb - indoorDryBulb) * 1000;
     const freshAirLatent = freshAirTotal - freshAirSensible;
     const infiltration = buildInfiltrationContext({
       area: area,
@@ -4608,7 +4631,7 @@
     const infiltrationM3S = infiltration.airflowCfm * CFM_TO_M3S;
     const infiltrationMassFlowDa = safeDiv(infiltrationM3S, svOut, 0);
     const infiltrationTotal = infiltrationMassFlowDa * (hOut - hIn) * 1000;
-    const infiltrationSensible = infiltrationMassFlowDa * ventCp * (outdoorDryBulb - indoorDryBulb) * 1000;
+    const infiltrationSensible = infiltrationMassFlowDa * cpOa * (outdoorDryBulb - indoorDryBulb) * 1000;
     const infiltrationLatent = infiltrationTotal - infiltrationSensible;
 
     const spaceSensible = peopleSensible + lightingSensible + equipmentSensible + windowSensible + wallSensible + roofSensible + infiltrationSensible;
@@ -4758,7 +4781,11 @@
     const coilTotalLoad = roomPsychro
       ? Math.max(roomPsychro.coilTotalLoad || 0, 0)
       : Math.max(0, supplyMassFlowDa * (mixedAirEnthalpy - supplyEnthalpy) * 1000);
-    const coilCp = 1.006 + 1.86 * ((mixedAirHumidity + supplyHumidity) / 2);
+    // ASHRAE: coil sensible capacity uses entering (mixed) air cp.
+    // The average of entering + leaving states under-estimates cp because
+    // dehumidification reduces W from mixed to supply. Entering state is
+    // the conservative, ASHRAE-recommended reference.
+    const coilCp = 1.006 + 1.86 * mixedAirHumidity;
     const coilSensible = roomPsychro
       ? Math.max(roomPsychro.coilSensible || 0, 0)
       : supplyMassFlowDa * coilCp * (mixedAirTemp - supplyTemp) * 1000;
@@ -5800,8 +5827,8 @@
     byId("cooling-tbody").innerHTML =
       '<tr><td>People - sensible</td><td>' + result.inputs.occ + " x " + result.peopleSensible / Math.max(parseFloat(result.inputs.occ) || 1, 1) + ' W/person</td><td>' + result.inputs.occ + ' persons</td><td>Activity: ' + String(result.inputs.occ_act).replace(/_/g, " ") + '</td><td class="num">' + formatInt(result.peopleSensible) + '</td><td class="num">-</td></tr>'
       + '<tr><td>People - latent</td><td>' + result.inputs.occ + " x " + result.peopleLatent / Math.max(parseFloat(result.inputs.occ) || 1, 1) + ' W/person</td><td>' + result.inputs.occ + ' persons</td><td>Metabolic latent</td><td class="num">-</td><td class="num">' + formatInt(result.peopleLatent) + "</td></tr>"
-      + '<tr><td>Lighting</td><td>A x W/m2 x CLF 0.9</td><td>' + formatNumber(result.area, 1) + " m2</td><td>" + result.inputs.lighting + ' W/m2</td><td class="num">' + formatInt(result.lightingSensible) + '</td><td class="num">-</td></tr>'
-      + '<tr><td>Equipment</td><td>A x W/m2 x diversity 0.8</td><td>' + formatNumber(result.area, 1) + " m2</td><td>" + result.inputs.equip + ' W/m2</td><td class="num">' + formatInt(result.equipmentSensible) + '</td><td class="num">-</td></tr>'
+      + '<tr><td>Lighting</td><td>A × W/m² × CLF ' + formatNumber(parseFloat(result.inputs.clf_lighting) || 0.90, 2) + '</td><td>' + formatNumber(result.area, 1) + " m²</td><td>" + result.inputs.lighting + ' W/m²</td><td class="num">' + formatInt(result.lightingSensible) + '</td><td class="num">-</td></tr>'
+      + '<tr><td>Equipment</td><td>A × W/m² × diversity ' + formatNumber(parseFloat(result.inputs.div_equip) || 0.80, 2) + '</td><td>' + formatNumber(result.area, 1) + " m²</td><td>" + result.inputs.equip + ' W/m²</td><td class="num">' + formatInt(result.equipmentSensible) + '</td><td class="num">-</td></tr>'
       + '<tr><td>Window solar</td><td>Σ(A_window x incident solar on glass x SHGC/SC x CLF)</td><td>' + formatNumber(envelope.windowAreaTotal, 2) + " m2</td><td>" + escapeHtml(result.solar.activeOrientationLabel || orientationLabel(result.inputs.win_orient)) + " · incident=" + Math.round(result.solar.point.incidentSolarOnGlassWm2 || 0) + " W/m2, effective load=" + Math.round(result.solar.point.coolingLoadSolarWm2 || result.solar.point.shgf || 0) + " W/m2, SC/SHGC=" + result.inputs.sc_glass + ", CLF=" + result.inputs.clf_shade + '</td><td class="num">' + formatInt(result.windowSensible) + '</td><td class="num">-</td></tr>'
       + windowBreakdownRows
       + '<tr><td>Wall conduction</td><td>Σ(U x A_net x corrected CLTD x orientation factor)</td><td>' + formatNumber(envelope.wallNetArea, 2) + " m2</td><td>U=" + result.inputs.u_wall + ", CLTD(base)=" + formatNumber(result.cltdContext && result.cltdContext.wallBase || (CLTD_WALL[Math.min(Math.max((envelope.walls || []).length, 1), 4)] || 0), 1) + ', corrected≈' + formatNumber(result.cltdContext && result.cltdContext.wallCorrected || 0, 1) + '</td><td class="num">' + formatInt(result.wallSensible) + '</td><td class="num">-</td></tr>'
@@ -5820,7 +5847,7 @@
     const systemShr = clamp(result.systemShr || result.shr || 0.85, 0, 1);
     const roomShr = clamp(result.roomShr || systemShr, 0, 1);
     const shrPercent = systemShr * 100;
-    const shrColor = systemShr > 0.85 ? "var(--accent)" : systemShr > 0.7 ? "var(--accent3)" : "var(--accent4)";
+    const shrColor = systemShr > 0.85 ? "#16a34a" : systemShr > 0.7 ? "#d97706" : "#dc2626";
     const shrText = systemShr > 0.95
       ? "Mainly sensible load. Standard comfort cooling is adequate."
       : systemShr > 0.85
@@ -5837,17 +5864,17 @@
 
     byId("shr-content").innerHTML =
       '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:16px;">'
-      + '<span style="font-family:var(--mono);font-size:48px;font-weight:500;color:' + shrColor + '">' + formatNumber(shrPercent, 1) + '<span style="font-size:20px">%</span></span>'
-      + '<span style="font-size:13px;color:var(--text2)">System SHR = ' + formatInt(result.totalS) + " W sensible / " + formatInt(result.totalLoad) + " W total</span>"
+      + '<span style="font-family:\'JetBrains Mono\',monospace;font-size:48px;font-weight:700;color:' + shrColor + '">' + formatNumber(shrPercent, 1) + '<span style="font-size:20px">%</span></span>'
+      + '<span style="font-size:13px;color:#475569">System SHR = ' + formatInt(result.totalS) + " W sensible / " + formatInt(result.totalLoad) + " W total</span>"
       + "</div>"
       + '<div class="shr-bar-bg"><div class="shr-bar-fill" style="width:' + shrPercent.toFixed(1) + "%;background:" + shrColor + '"></div></div>'
-      + '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:4px;"><span>0 - latent dominant</span><span>1.0 - sensible dominant</span></div>'
+      + '<div style="display:flex;justify-content:space-between;font-family:\'JetBrains Mono\',monospace;font-size:10px;color:#94a3b8;margin-top:4px;"><span>0 - latent dominant</span><span>1.0 - sensible dominant</span></div>'
       + '<table class="calc-table" style="margin-top:16px;"><thead><tr><th>BASIS</th><th>FORMULA</th><th>VALUE</th><th>NOTE</th></tr></thead><tbody>'
       + '<tr><td>System SHR</td><td>Total sensible / total load</td><td class="num">' + formatNumber(systemShr, 3) + '</td><td>Includes room, infiltration, and fresh-air loads used for coil sizing.</td></tr>'
       + '<tr><td>Room SHR</td><td>Space sensible / space total</td><td class="num">' + formatNumber(roomShr, 3) + '</td><td>Based on room and infiltration load before outdoor-air ventilation is added.</td></tr>'
       + "</tbody></table>"
-      + '<div style="margin-top:12px;padding:12px 14px;background:var(--bg3);border-left:3px solid var(--border);border-radius:0 var(--r) var(--r) 0;font-size:12px;font-family:var(--mono);color:var(--text2);">' + shrShiftText + "</div>"
-      + '<div style="margin-top:16px;padding:12px 14px;background:var(--bg3);border-left:3px solid ' + shrColor + ';border-radius:0 var(--r) var(--r) 0;font-size:12px;font-family:var(--mono);color:var(--text2);">' + shrText + "</div>";
+      + '<div style="margin-top:12px;padding:12px 14px;background:#f8fafc;border-left:3px solid #e2e8f0;border-radius:0 6px 6px 0;font-size:12px;font-family:\'JetBrains Mono\',monospace;color:#475569;">' + shrShiftText + "</div>"
+      + '<div style="margin-top:16px;padding:12px 14px;background:#f8fafc;border-left:3px solid ' + shrColor + ';border-radius:0 6px 6px 0;font-size:12px;font-family:\'JetBrains Mono\',monospace;color:#475569;">' + shrText + "</div>";
   }
 
   function renderTonnage(result) {
@@ -5869,7 +5896,7 @@
 
     byId("tr-sizes-ref").innerHTML = STD_TR.map(function (size) {
       const active = Number(size) === Number(result.tr_catalog);
-      return '<span style="font-family:var(--mono);font-size:12px;padding:5px 12px;border-radius:var(--r);border:1px solid ' + (active ? "var(--accent)" : "var(--border)") + ";background:" + (active ? "rgba(0,201,167,0.1)" : "var(--bg3)") + ";color:" + (active ? "var(--accent)" : "var(--text2)") + ';">' + size + " TR" + (active ? " ✓" : "") + "</span>";
+      return '<span style="font-family:\'JetBrains Mono\',monospace;font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid ' + (active ? "#16a34a" : "#e2e8f0") + ";background:" + (active ? "rgba(22,163,74,0.08)" : "#f8fafc") + ";color:" + (active ? "#15803d" : "#475569") + ';">' + size + " TR" + (active ? " ✓" : "") + "</span>";
     }).join("");
   }
 
@@ -6015,7 +6042,7 @@
     };
     const processAir = ductStrategy.process;
     const overallStatus = zoneDuctPlan ? zoneDuctPlan.overallStatus : (supply.validationStatus || "OK");
-    const statusColor = overallStatus === "REJECT" ? "var(--accent4)" : overallStatus === "WARNING" ? "var(--accent3)" : "var(--accent)";
+    const statusColor = overallStatus === "REJECT" ? "#dc2626" : overallStatus === "WARNING" ? "#d97706" : "#16a34a";
     const alternativeCards = [supply, returnAir, processAir].filter(function (strategy) {
       return strategy && strategy.bestAlternative;
     }).map(function (strategy) {
@@ -6051,7 +6078,7 @@
     }
     const zoneRows = zoneDuctPlan && zoneDuctPlan.zones && zoneDuctPlan.zones.length
       ? zoneDuctPlan.zones.map(function (zone) {
-          const zoneStatusColor = zone.validationStatus === "REJECT" ? "var(--accent4)" : zone.validationStatus === "WARNING" ? "var(--accent3)" : "var(--accent)";
+          const zoneStatusColor = zone.validationStatus === "REJECT" ? "#dc2626" : zone.validationStatus === "WARNING" ? "#d97706" : "#16a34a";
           return '<tr><td>' + escapeHtml(zone.name) + ' supply</td><td>' + formatInt(zone.conditionedCFM) + '</td><td>' + zone.supply.velocityFpm + '</td><td>' + zone.supply.trunkDuct.rectW + "x" + zone.supply.trunkDuct.rectH + '</td><td>Ø' + zone.supply.trunkDuct.dia_in + '</td><td class="num">' + formatNumber(zone.totalEsp, 0) + ' Pa</td></tr>'
             + '<tr><td>' + escapeHtml(zone.name) + ' return</td><td>' + formatInt(zone.returnCFM) + '</td><td>' + zone.return.velocityFpm + '</td><td>' + zone.return.trunkDuct.rectW + "x" + zone.return.trunkDuct.rectH + '</td><td>Ø' + zone.return.trunkDuct.dia_in + '</td><td class="num" style="color:' + zoneStatusColor + ';">' + escapeHtml(zone.validationStatus) + '</td></tr>'
             + (zone.process
@@ -6113,7 +6140,7 @@
       + espRowMarkup("Cooling coil", "1 ea", EQUIP_PRESSURE.cooling_coil, EQUIP_PRESSURE.cooling_coil, "EQUIP")
       + espRowMarkup("Filter section", "1 ea", EQUIP_PRESSURE.filter_clean, EQUIP_PRESSURE.filter_clean, "EQUIP")
       + espRowMarkup("Mixing box and terminals", "1 set", formatInt(result.equipment_loss - EQUIP_PRESSURE.cooling_coil - EQUIP_PRESSURE.filter_clean), formatInt(result.equipment_loss - EQUIP_PRESSURE.cooling_coil - EQUIP_PRESSURE.filter_clean), "EQUIP")
-      + '<div class="esp-row esp-total-row"><div class="esp-cell"><b>TOTAL ESP</b></div><div class="esp-cell">-</div><div class="esp-cell">-</div><div class="esp-cell num"><b>' + formatInt(result.total_esp) + ' Pa</b></div><div class="esp-cell" style="color:var(--accent3);font-size:10px;font-family:var(--mono);">' + formatNumber(result.total_esp / 249.09, 2) + " in.w.g.</div></div>"
+      + '<div class="esp-row esp-total-row"><div class="esp-cell"><b>TOTAL ESP</b></div><div class="esp-cell">-</div><div class="esp-cell">-</div><div class="esp-cell num"><b>' + formatInt(result.total_esp) + ' Pa</b></div><div class="esp-cell" style="color:#d97706;font-size:10px;font-family:\'JetBrains Mono\',monospace;">' + formatNumber(result.total_esp / 249.09, 2) + " in.w.g.</div></div>"
       // Compute the share percentages from the SAME numbers shown in the
       // ESP table above. The duct-diagnostics object recomputes friction
       // from per-trunk straight-pipe assumptions and can disagree with the
@@ -6191,40 +6218,40 @@
 	  function designAdvisorCardsMarkup(items, compact) {
     const suggestions = (items || []).slice(0, compact ? 3 : 6);
     if (!suggestions.length) {
-      return '<p style="color:var(--text3);font-family:var(--mono);font-size:12px;">No active recommendations.</p>';
+      return '<p style="color:#94a3b8;font-family:\'JetBrains Mono\',monospace;font-size:12px;">No active recommendations.</p>';
     }
 
-	    return '<div class="advisory-card-stack" style="display:grid;gap:8px;grid-template-columns:1fr;min-width:0;">' + suggestions.map(function (item) {
-	      const border = designAdvisorSeverityColor(item.severity);
-	      return '<div class="advisory-card" style="padding:10px 12px;border:1px solid ' + border + ';background:rgba(15,23,42,0.02);border-radius:10px;min-width:0;overflow-wrap:break-word;white-space:normal;">'
-	        + '<div class="advisory-card-head" style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;min-width:0;">'
-	        + '<div style="font-size:11px;font-weight:600;color:var(--text);min-width:0;overflow-wrap:break-word;">' + escapeHtml(item.title || "Recommendation") + "</div>"
-        + '<div style="font-size:9px;font-family:var(--mono);letter-spacing:.08em;color:var(--text3);text-transform:uppercase;">' + escapeHtml(item.severity || "advisory") + "</div>"
+    return '<div class="advisory-card-stack" style="display:grid;gap:8px;grid-template-columns:1fr;min-width:0;">' + suggestions.map(function (item) {
+      const border = designAdvisorSeverityColor(item.severity);
+      return '<div class="advisory-card" style="padding:10px 14px;border:1px solid ' + border + ';background:#fafafa;border-radius:6px;min-width:0;overflow-wrap:break-word;white-space:normal;">'
+        + '<div class="advisory-card-head" style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;min-width:0;">'
+        + '<div style="font-size:11px;font-weight:700;color:#0f172a;min-width:0;overflow-wrap:break-word;">' + escapeHtml(item.title || "Recommendation") + "</div>"
+        + '<div style="font-size:8px;font-family:\'JetBrains Mono\',monospace;letter-spacing:.10em;color:#94a3b8;text-transform:uppercase;">' + escapeHtml(item.severity || "advisory") + "</div>"
         + "</div>"
         + ((item.complianceStatus || item.confidenceScore != null)
-          ? '<div style="margin-top:6px;font-size:10px;color:var(--text3);font-family:var(--mono);line-height:1.4;">'
+          ? '<div style="margin-top:5px;font-size:9px;color:#64748b;font-family:\'JetBrains Mono\',monospace;line-height:1.4;">'
             + (item.complianceStatus ? "Compliance: " + escapeHtml(item.complianceStatus) : "")
             + (item.confidenceScore != null ? (item.complianceStatus ? " | " : "") + "Confidence " + formatNumber(item.confidenceScore * 100, 0) + "%" : "")
             + "</div>"
           : "")
         + (item.issue
-          ? '<div style="margin-top:6px;font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.5;">' + escapeHtml(item.issue) + "</div>"
+          ? '<div style="margin-top:6px;font-size:10px;color:#334155;font-family:\'JetBrains Mono\',monospace;line-height:1.5;">' + escapeHtml(item.issue) + "</div>"
           : "")
         + (item.impact
-          ? '<div style="margin-top:6px;font-size:10px;color:var(--text2);font-family:var(--mono);line-height:1.4;">Impact: ' + escapeHtml(item.impact) + "</div>"
+          ? '<div style="margin-top:5px;font-size:9.5px;color:#475569;font-family:\'JetBrains Mono\',monospace;line-height:1.4;">Impact: ' + escapeHtml(item.impact) + "</div>"
           : "")
-        + '<div style="margin-top:6px;font-size:11px;color:var(--text);font-family:var(--mono);line-height:1.5;">Action: ' + escapeHtml(item.recommendation || "") + "</div>"
+        + '<div style="margin-top:6px;font-size:10px;color:#0f172a;font-family:\'JetBrains Mono\',monospace;line-height:1.5;font-weight:600;">Action: ' + escapeHtml(item.recommendation || "") + "</div>"
         + (item.why
-          ? '<div style="margin-top:6px;font-size:10px;color:var(--text2);font-family:var(--mono);line-height:1.4;">Why: ' + escapeHtml(item.why) + "</div>"
+          ? '<div style="margin-top:5px;font-size:9.5px;color:#475569;font-family:\'JetBrains Mono\',monospace;line-height:1.4;">Why: ' + escapeHtml(item.why) + "</div>"
           : "")
         + (item.tradeoff
-          ? '<div style="margin-top:6px;font-size:10px;color:var(--text2);font-family:var(--mono);line-height:1.4;">Tradeoff: ' + escapeHtml(item.tradeoff) + "</div>"
+          ? '<div style="margin-top:5px;font-size:9.5px;color:#475569;font-family:\'JetBrains Mono\',monospace;line-height:1.4;">Tradeoff: ' + escapeHtml(item.tradeoff) + "</div>"
           : "")
         + (item.whenToUse
-          ? '<div style="margin-top:6px;font-size:10px;color:var(--text2);font-family:var(--mono);line-height:1.4;">When to use: ' + escapeHtml(item.whenToUse) + "</div>"
+          ? '<div style="margin-top:5px;font-size:9.5px;color:#475569;font-family:\'JetBrains Mono\',monospace;line-height:1.4;">When to use: ' + escapeHtml(item.whenToUse) + "</div>"
           : "")
         + (item.basis
-          ? '<div style="margin-top:6px;font-size:10px;color:var(--text3);font-family:var(--mono);line-height:1.4;">Basis: ' + escapeHtml(item.basis) + "</div>"
+          ? '<div style="margin-top:5px;font-size:9px;color:#94a3b8;font-family:\'JetBrains Mono\',monospace;line-height:1.4;">Basis: ' + escapeHtml(item.basis) + "</div>"
           : "")
         + "</div>";
     }).join("") + "</div>";
@@ -6358,38 +6385,38 @@
     const psychroValidityText = scenario.compliance && scenario.compliance.psychro_converged != null
       ? String(scenario.compliance.psychro_converged)
       : "—";
-    return '<div style="padding:14px;border:1px solid ' + (preferred ? "rgba(0,201,167,0.35)" : "rgba(148,163,184,0.2)") + ';background:' + (preferred ? "rgba(0,201,167,0.05)" : "rgba(15,23,42,0.02)") + ';border-radius:12px;">'
+    return '<div style="padding:12px 14px;border:1px solid ' + (preferred ? "rgba(22,163,74,0.35)" : "#e2e8f0") + ';background:' + (preferred ? "rgba(22,163,74,0.04)" : "#fafafa") + ';border-radius:6px;margin-bottom:8px;">'
       + '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">'
       + '<div>'
-      + '<div style="font-size:12px;font-weight:700;color:var(--text);">' + escapeHtml(scenario.name || "Scenario") + "</div>"
-      + '<div style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;">' + escapeHtml(rejected ? "rejected" : scenario.intent || "simulation") + (preferred ? " · preferred" : "") + "</div>"
+      + '<div style="font-size:11px;font-weight:700;color:#0f172a;">' + escapeHtml(scenario.name || "Scenario") + "</div>"
+      + '<div style="margin-top:3px;font-size:8.5px;color:#94a3b8;font-family:\'JetBrains Mono\',monospace;letter-spacing:.10em;text-transform:uppercase;">' + escapeHtml(rejected ? "rejected" : scenario.intent || "simulation") + (preferred ? " · PREFERRED" : "") + "</div>"
       + "</div>"
-      + '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">'
-      + '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(15,23,42,0.04);border:1px solid rgba(148,163,184,0.2);color:var(--text2);">Overall ' + formatScenarioNumberValue(scenario, scenario.score && scenario.score.overall, 1, "score.overall", true) + '</span>'
-      + '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(22,102,169,0.08);border:1px solid rgba(22,102,169,0.2);color:var(--text2);">Eff. ' + formatScenarioNumberValue(scenario, scenario.score && scenario.score.efficiency, 0, "score.efficiency", true) + '</span>'
-      + '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);color:var(--text2);">Robust ' + formatScenarioNumberValue(scenario, scenario.score && scenario.score.robustness, 0, "score.robustness", true) + '</span>'
-      + '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);color:var(--text2);">' + escapeHtml(statusText) + '</span>'
+      + '<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;">'
+      + '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#f1f5f9;border:1px solid #e2e8f0;color:#475569;">Overall ' + formatScenarioNumberValue(scenario, scenario.score && scenario.score.overall, 1, "score.overall", true) + '</span>'
+      + '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#eff6ff;border:1px solid #bfdbfe;color:#3b82f6;">Eff. ' + formatScenarioNumberValue(scenario, scenario.score && scenario.score.efficiency, 0, "score.efficiency", true) + '</span>'
+      + '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;">Robust ' + formatScenarioNumberValue(scenario, scenario.score && scenario.score.robustness, 0, "score.robustness", true) + '</span>'
+      + '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#fefce8;border:1px solid #fde68a;color:#d97706;">' + escapeHtml(statusText) + '</span>'
       + "</div>"
       + "</div>"
-      + '<div style="margin-top:10px;font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.55;">'
-      + '<div><b style="color:var(--text);">System:</b> ' + escapeHtml(scenario.system_type_label || scenario.system_type || "—") + "</div>"
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Changed:</b> ' + escapeHtml(scenarioMutationSummary(scenario.input_mutation)) + "</div>"
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Airflow:</b> Cooling ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.cooling, "airflow.cooling", true) + ' | Recirc ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.recirculation, "airflow.recirculation", true) + ' | Vent ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.ventilation, "airflow.ventilation", true) + ' | Total ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.total, "airflow.total", true) + ' CFM</div>'
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Return loop:</b> To coil ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.to_coil, "return_air.to_coil", false) + ' | Bypass ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.bypass_recirculation, "return_air.bypass_recirculation", false) + ' | Vent path ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.ventilation_path, "return_air.ventilation_path", false) + ' CFM</div>'
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Performance:</b> Fan ' + formatScenarioNumberValue(scenario, scenario.performance && scenario.performance.fan_power, 2, "performance.fan_power", true) + ' kW | Energy ' + formatScenarioIntValue(scenario, scenario.performance && scenario.performance.energy_annual, "performance.energy_annual", true) + ' kWh | ESP ' + formatScenarioIntValue(scenario, scenario.performance && scenario.performance.esp, "performance.esp", true) + ' Pa | Coil ' + formatScenarioNumberValue(scenario, scenario.performance && scenario.performance.cooling_tr, 2, "performance.cooling_tr", true) + ' TR</div>'
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Cost / energy:</b> Capex INR ' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.capex_total, 0, "cost.capex_total", false) + ' | Energy cost INR ' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.energy_cost_annual, 0, "cost.energy_cost_annual", false) + ' | Payback ' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.payback_years, 2, "cost.payback_years", true) + ' yr</div>'
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Comparison vs base:</b> Energy ' + formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.energy_diff, 0, "delta.energy_diff", " kWh", true) + ' | Fan ' + formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.fan_power_diff, 2, "delta.fan_power_diff", " kW", true) + ' | Capex INR ' + formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.capex_diff, 0, "delta.capex_diff", "", false) + '</div>'
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Energy-cost delta:</b> ' + formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.energy_cost_diff, 0, "delta.energy_cost_diff", " INR/yr", true) + '</div>'
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Compliance:</b> ACH ' + formatScenarioNumberValue(scenario, scenario.compliance && scenario.compliance.ach, 1, "compliance.ach", true) + ' / ' + formatScenarioNumberValue(scenario, scenario.compliance && scenario.compliance.ach_required, 1, "compliance.ach_required", true) + ' | Airflow ' + escapeHtml(airflowValidityText) + ' | Psychro ' + escapeHtml(psychroValidityText) + '</div>'
+      + '<div style="margin-top:8px;font-size:9.5px;color:#334155;font-family:\'JetBrains Mono\',monospace;line-height:1.6;">'
+      + '<div><b style="color:#0f172a;">System:</b> ' + escapeHtml(scenario.system_type_label || scenario.system_type || "—") + "</div>"
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Changed:</b> ' + escapeHtml(scenarioMutationSummary(scenario.input_mutation)) + "</div>"
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Airflow:</b> Cooling ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.cooling, "airflow.cooling", true) + ' | Recirc ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.recirculation, "airflow.recirculation", true) + ' | Vent ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.ventilation, "airflow.ventilation", true) + ' | Total ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.total, "airflow.total", true) + ' CFM</div>'
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Return loop:</b> To coil ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.to_coil, "return_air.to_coil", false) + ' | Bypass ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.bypass_recirculation, "return_air.bypass_recirculation", false) + ' | Vent path ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.ventilation_path, "return_air.ventilation_path", false) + ' CFM</div>'
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Performance:</b> Fan ' + formatScenarioNumberValue(scenario, scenario.performance && scenario.performance.fan_power, 2, "performance.fan_power", true) + ' kW | Energy ' + formatScenarioIntValue(scenario, scenario.performance && scenario.performance.energy_annual, "performance.energy_annual", true) + (scenario.performance && scenario.performance.energy_simulated ? ' kWh' : scenario.performance && scenario.performance.energy_annual != null ? ' kWh (est)' : '') + ' | ESP ' + formatScenarioIntValue(scenario, scenario.performance && scenario.performance.esp, "performance.esp", true) + ' Pa | Coil ' + formatScenarioNumberValue(scenario, scenario.performance && scenario.performance.cooling_tr, 2, "performance.cooling_tr", true) + ' TR</div>'
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Cost / energy:</b> Capex INR ' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.capex_total, 0, "cost.capex_total", false) + ' | Energy cost INR ' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.energy_cost_annual, 0, "cost.energy_cost_annual", false) + ' | Payback ' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.payback_years, 2, "cost.payback_years", true) + ' yr</div>'
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Comparison vs base:</b> Energy ' + formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.energy_diff, 0, "delta.energy_diff", " kWh", true) + ' | Fan ' + formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.fan_power_diff, 2, "delta.fan_power_diff", " kW", true) + ' | Capex INR ' + formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.capex_diff, 0, "delta.capex_diff", "", false) + '</div>'
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Energy-cost delta:</b> ' + formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.energy_cost_diff, 0, "delta.energy_cost_diff", " INR/yr", true) + '</div>'
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Compliance:</b> ACH ' + formatScenarioNumberValue(scenario, scenario.compliance && scenario.compliance.ach, 1, "compliance.ach", true) + ' / ' + formatScenarioNumberValue(scenario, scenario.compliance && scenario.compliance.ach_required, 1, "compliance.ach_required", true) + ' | Airflow ' + escapeHtml(airflowValidityText) + ' | Psychro ' + escapeHtml(psychroValidityText) + '</div>'
       + (scenario.rejection_reason
-        ? '<div style="margin-top:8px;color:var(--accent4);"><b style="color:var(--text);">Rejection:</b> ' + escapeHtml(scenario.rejection_reason) + "</div>"
+        ? '<div style="margin-top:6px;color:#dc2626;"><b style="color:#0f172a;">Rejection:</b> ' + escapeHtml(scenario.rejection_reason) + "</div>"
         : "")
       + "</div>"
       + "</div>";
   }
 
   function optimizationScenarioTableMarkup(scenarioResults, preferredOptionKey) {
-    return '<div class="table-wrap"><table class="calc-table"><thead><tr><th>SCENARIO</th><th>SYSTEM</th><th>AIRFLOW SPLIT</th><th>RETURN LOOP</th><th>TOTAL CFM</th><th>ACH</th><th>FAN kW</th><th>ENERGY kWh</th><th>ESP</th><th>CAPEX INR</th><th>ENERGY COST</th><th>PAYBACK</th><th>ENERGY Δ</th><th>FAN Δ</th><th>SCORES</th><th>STATUS</th></tr></thead><tbody>'
+    return '<div class="table-wrap"><table class="calc-table"><thead><tr><th>SCENARIO</th><th>SYSTEM</th><th class="scen-hide">AIRFLOW SPLIT</th><th class="scen-hide">RETURN LOOP</th><th>CFM</th><th>ACH</th><th>FAN kW</th><th>ENERGY kWh</th><th>ESP Pa</th><th>CAPEX INR</th><th>ENERGY COST</th><th class="scen-hide">PAYBACK</th><th class="scen-hide">ENERGY Δ</th><th class="scen-hide">FAN Δ</th><th>SCORES</th><th>STATUS</th></tr></thead><tbody>'
       + scenarioResults.map(function (scenario) {
         const statusText = scenario && scenario.compliance && scenario.compliance.status
           ? scenario.compliance.status
@@ -6406,7 +6433,8 @@
         const fanDeltaText = formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.fan_power_diff, 2, "delta.fan_power_diff", " kW", true)
           + ' | '
           + formatScenarioSignedValue(scenario, scenario.delta && scenario.delta.fan_power_diff_percent, 1, "delta.fan_power_diff_percent", "%", true);
-        return '<tr><td>' + escapeHtml(scenario.name || "Scenario") + (!scenario.rejected && scenario.key === preferredOptionKey ? ' <span class="admin-chip">PREFERRED</span>' : "") + '<div style="margin-top:4px;color:var(--text3);font-size:10px;">' + escapeHtml(scenarioMutationSummary(scenario.input_mutation)) + '</div></td><td>' + escapeHtml(scenario.system_type_label || scenario.system_type || "—") + '</td><td>Cool ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.cooling, "airflow.cooling", true) + '<br>Recirc ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.recirculation, "airflow.recirculation", true) + '<br>Vent ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.ventilation, "airflow.ventilation", true) + '</td><td>To coil ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.to_coil, "return_air.to_coil", false) + '<br>Bypass ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.bypass_recirculation, "return_air.bypass_recirculation", false) + '<br>Vent path ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.ventilation_path, "return_air.ventilation_path", false) + '</td><td class="num">' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.total, "airflow.total", true) + '</td><td class="num">' + formatScenarioNumberValue(scenario, scenario.compliance && scenario.compliance.ach, 1, "compliance.ach", true) + '</td><td class="num">' + formatScenarioNumberValue(scenario, scenario.performance && scenario.performance.fan_power, 2, "performance.fan_power", true) + '</td><td class="num">' + formatScenarioIntValue(scenario, scenario.performance && scenario.performance.energy_annual, "performance.energy_annual", true) + '</td><td class="num">' + formatScenarioIntValue(scenario, scenario.performance && scenario.performance.esp, "performance.esp", true) + '</td><td class="num">' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.capex_total, 0, "cost.capex_total", false) + '</td><td class="num">' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.energy_cost_annual, 0, "cost.energy_cost_annual", false) + '</td><td class="num">' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.payback_years, 2, "cost.payback_years", true) + '</td><td class="num">' + energyDeltaText + '</td><td class="num">' + fanDeltaText + '</td><td class="num">' + scoreText + '</td><td>' + escapeHtml(statusText) + (scenario.rejection_reason ? '<div style="margin-top:4px;color:var(--accent4);font-size:10px;">' + escapeHtml(scenario.rejection_reason) + '</div>' : "") + '</td></tr>';
+        const energySimLabel = scenario.performance && scenario.performance.energy_simulated ? '' : scenario.performance && scenario.performance.energy_annual != null ? '†' : '';
+        return '<tr><td class="scen-name">' + escapeHtml(scenario.name || "Scenario") + (!scenario.rejected && scenario.key === preferredOptionKey ? ' <span class="admin-chip">PREFERRED</span>' : "") + '</td><td class="scen-sys">' + escapeHtml(scenario.system_type_label || scenario.system_type || "—") + '</td><td class="scen-hide">Cool ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.cooling, "airflow.cooling", true) + '<br>Recirc ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.recirculation, "airflow.recirculation", true) + '<br>Vent ' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.ventilation, "airflow.ventilation", true) + '</td><td class="scen-hide">To coil ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.to_coil, "return_air.to_coil", false) + '<br>Bypass ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.bypass_recirculation, "return_air.bypass_recirculation", false) + '<br>Vent path ' + formatScenarioIntValue(scenario, scenario.return_air && scenario.return_air.ventilation_path, "return_air.ventilation_path", false) + '</td><td class="num">' + formatScenarioIntValue(scenario, scenario.airflow && scenario.airflow.total, "airflow.total", true) + '</td><td class="num">' + formatScenarioNumberValue(scenario, scenario.compliance && scenario.compliance.ach, 1, "compliance.ach", true) + '</td><td class="num">' + formatScenarioNumberValue(scenario, scenario.performance && scenario.performance.fan_power, 2, "performance.fan_power", true) + '</td><td class="num">' + formatScenarioIntValue(scenario, scenario.performance && scenario.performance.energy_annual, "performance.energy_annual", true) + energySimLabel + '</td><td class="num">' + formatScenarioIntValue(scenario, scenario.performance && scenario.performance.esp, "performance.esp", true) + '</td><td class="num">' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.capex_total, 0, "cost.capex_total", false) + '</td><td class="num">' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.energy_cost_annual, 0, "cost.energy_cost_annual", false) + '</td><td class="num scen-hide">' + formatScenarioNumberValue(scenario, scenario.cost && scenario.cost.payback_years, 2, "cost.payback_years", true) + '</td><td class="num scen-hide">' + energyDeltaText + '</td><td class="num scen-hide">' + fanDeltaText + '</td><td class="num">' + scoreText + '</td><td>' + escapeHtml(statusText) + '</td></tr>';
       }).join("")
       + "</tbody></table></div>";
   }
@@ -6414,31 +6442,31 @@
   function designAlternativeCardMarkup(option, preferredOptionKey) {
     const candidate = option || {};
     const preferred = candidate.key && candidate.key === preferredOptionKey;
-    return '<div style="padding:14px;border:1px solid ' + (preferred ? "rgba(0,201,167,0.35)" : "rgba(148,163,184,0.2)") + ';background:' + (preferred ? "rgba(0,201,167,0.05)" : "rgba(15,23,42,0.02)") + ';border-radius:12px;">'
+    return '<div style="padding:12px 14px;border:1px solid ' + (preferred ? "rgba(22,163,74,0.35)" : "#e2e8f0") + ';background:' + (preferred ? "rgba(22,163,74,0.04)" : "#fafafa") + ';border-radius:6px;margin-bottom:8px;">'
       + '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">'
       + '<div>'
-      + '<div style="font-size:12px;font-weight:700;color:var(--text);">' + escapeHtml(candidate.title || "Option") + "</div>"
-      + '<div style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;">' + escapeHtml(candidate.intent || "alternative") + (preferred ? " · preferred" : "") + "</div>"
+      + '<div style="font-size:11px;font-weight:700;color:#0f172a;">' + escapeHtml(candidate.title || "Option") + "</div>"
+      + '<div style="margin-top:3px;font-size:8.5px;color:#94a3b8;font-family:\'JetBrains Mono\',monospace;letter-spacing:.10em;text-transform:uppercase;">' + escapeHtml(candidate.intent || "alternative") + (preferred ? " · PREFERRED" : "") + "</div>"
       + "</div>"
-      + '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">'
-      + '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(22,102,169,0.08);border:1px solid rgba(22,102,169,0.2);color:var(--text2);">Cost ' + formatInt(candidate.costScore || 0) + '</span>'
-      + '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(0,201,167,0.08);border:1px solid rgba(0,201,167,0.2);color:var(--text2);">Eff. ' + formatInt(candidate.efficiencyScore || 0) + '</span>'
-      + '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);color:var(--text2);">Robust ' + formatInt(candidate.robustnessScore || 0) + '</span>'
-      + '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);color:var(--text2);">Compliance ' + formatInt(candidate.complianceScore || 0) + '</span>'
-      + (candidate.decisionScore != null ? '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(15,23,42,0.04);border:1px solid rgba(148,163,184,0.2);color:var(--text2);">Rank ' + formatNumber(candidate.decisionScore || 0, 1) + '</span>' : "")
-      + (candidate.complianceStatus ? '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.2);color:var(--text2);">' + escapeHtml(candidate.complianceStatus) + '</span>' : "")
-      + (candidate.confidenceScore != null ? '<span style="font-family:var(--mono);font-size:10px;padding:4px 7px;border-radius:999px;background:rgba(15,23,42,0.04);border:1px solid rgba(148,163,184,0.2);color:var(--text2);">Confidence ' + formatNumber(candidate.confidenceScore * 100, 0) + '%</span>' : "")
+      + '<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;">'
+      + '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#eff6ff;border:1px solid #bfdbfe;color:#3b82f6;">Cost ' + formatInt(candidate.costScore || 0) + '</span>'
+      + '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#ecfdf5;border:1px solid #a7f3d0;color:#059669;">Eff. ' + formatInt(candidate.efficiencyScore || 0) + '</span>'
+      + '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;">Robust ' + formatInt(candidate.robustnessScore || 0) + '</span>'
+      + '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#fefce8;border:1px solid #fde68a;color:#d97706;">Compliance ' + formatInt(candidate.complianceScore || 0) + '</span>'
+      + (candidate.decisionScore != null ? '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#f1f5f9;border:1px solid #e2e8f0;color:#475569;">Rank ' + formatNumber(candidate.decisionScore || 0, 1) + '</span>' : "")
+      + (candidate.complianceStatus ? '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#f1f5f9;border:1px solid #e2e8f0;color:#475569;">' + escapeHtml(candidate.complianceStatus) + '</span>' : "")
+      + (candidate.confidenceScore != null ? '<span style="font-family:\'JetBrains Mono\',monospace;font-size:8px;padding:3px 7px;border-radius:999px;background:#f1f5f9;border:1px solid #e2e8f0;color:#475569;">Confidence ' + formatNumber(candidate.confidenceScore * 100, 0) + '%</span>' : "")
       + "</div>"
       + "</div>"
-      + '<div style="margin-top:10px;font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.55;">'
-      + '<div><b style="color:var(--text);">System:</b> ' + escapeHtml(candidate.systemType || "—") + "</div>"
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Scope:</b> ' + escapeHtml(candidate.scope || "—") + "</div>"
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Airflow:</b> ' + formatInt(candidate.airflowCfm || 0) + ' CFM | ' + formatNumber(candidate.ach || 0, 1) + ' ACH</div>'
-      + '<div style="margin-top:4px;"><b style="color:var(--text);">Delta:</b> Capex ' + (candidate.capexDeltaPercent > 0 ? "+" : "") + formatInt(candidate.capexDeltaPercent || 0) + '% | Energy ' + (candidate.energyDeltaPercent > 0 ? "+" : "") + formatInt(candidate.energyDeltaPercent || 0) + '%'
+      + '<div style="margin-top:8px;font-size:9.5px;color:#334155;font-family:\'JetBrains Mono\',monospace;line-height:1.6;">'
+      + '<div><b style="color:#0f172a;">System:</b> ' + escapeHtml(candidate.systemType || "—") + "</div>"
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Scope:</b> ' + escapeHtml(candidate.scope || "—") + "</div>"
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Airflow:</b> ' + formatInt(candidate.airflowCfm || 0) + ' CFM | ' + formatNumber(candidate.ach || 0, 1) + ' ACH</div>'
+      + '<div style="margin-top:3px;"><b style="color:#0f172a;">Delta:</b> Capex ' + (candidate.capexDeltaPercent > 0 ? "+" : "") + formatInt(candidate.capexDeltaPercent || 0) + '% | Energy ' + (candidate.energyDeltaPercent > 0 ? "+" : "") + formatInt(candidate.energyDeltaPercent || 0) + '%'
       + (candidate.annualEnergyKwh != null ? ' | Annual ' + formatInt(candidate.annualEnergyKwh || 0) + ' kWh' : "")
       + "</div>"
       + ((candidate.simulatedImpacts || candidate.estimatedImpacts)
-        ? '<div style="margin-top:4px;"><b style="color:var(--text);">' + (candidate.simulationBacked ? "Simulated impact:" : "Estimated impact:") + '</b> '
+        ? '<div style="margin-top:3px;"><b style="color:#0f172a;">' + (candidate.simulationBacked ? "Simulated impact:" : "Estimated impact:") + '</b> '
           + ((candidate.simulatedImpacts || candidate.estimatedImpacts).annualEnergyDeltaKwh != null
             ? 'Energy ' + (((candidate.simulatedImpacts || candidate.estimatedImpacts).annualEnergyDeltaKwh > 0) ? "+" : "") + formatInt((candidate.simulatedImpacts || candidate.estimatedImpacts).annualEnergyDeltaKwh || 0) + ' kWh | '
             : '')
@@ -6448,16 +6476,16 @@
           + (((candidate.simulatedImpacts || candidate.estimatedImpacts).fanPowerDeltaKw != null) ? ' (' + (((candidate.simulatedImpacts || candidate.estimatedImpacts).fanPowerDeltaKw > 0) ? "+" : "") + formatNumber((candidate.simulatedImpacts || candidate.estimatedImpacts).fanPowerDeltaKw || 0, 2) + ' kW)' : "")
           + '</div>'
         : "")
-      + (candidate.why ? '<div style="margin-top:4px;"><b style="color:var(--text);">Why:</b> ' + escapeHtml(candidate.why) + "</div>" : "")
-      + (candidate.whenToUse ? '<div style="margin-top:4px;"><b style="color:var(--text);">When:</b> ' + escapeHtml(candidate.whenToUse) + "</div>" : "")
+      + (candidate.why ? '<div style="margin-top:3px;"><b style="color:#0f172a;">Why:</b> ' + escapeHtml(candidate.why) + "</div>" : "")
+      + (candidate.whenToUse ? '<div style="margin-top:3px;"><b style="color:#0f172a;">When:</b> ' + escapeHtml(candidate.whenToUse) + "</div>" : "")
       + (candidate.strengths && candidate.strengths.length
-        ? '<div style="margin-top:8px;"><b style="color:var(--text);">Strengths:</b> ' + escapeHtml(candidate.strengths.join(" | ")) + "</div>"
+        ? '<div style="margin-top:6px;"><b style="color:#0f172a;">Strengths:</b> ' + escapeHtml(candidate.strengths.join(" | ")) + "</div>"
         : "")
       + (candidate.tradeoffs && candidate.tradeoffs.length
-        ? '<div style="margin-top:8px;"><b style="color:var(--text);">Tradeoffs:</b> ' + escapeHtml(candidate.tradeoffs.join(" | ")) + "</div>"
+        ? '<div style="margin-top:6px;"><b style="color:#0f172a;">Tradeoffs:</b> ' + escapeHtml(candidate.tradeoffs.join(" | ")) + "</div>"
         : "")
       + (candidate.actions && candidate.actions.length
-        ? '<div style="margin-top:8px;"><b style="color:var(--text);">Actions:</b> ' + escapeHtml(candidate.actions.join(" | ")) + "</div>"
+        ? '<div style="margin-top:6px;"><b style="color:#0f172a;">Actions:</b> ' + escapeHtml(candidate.actions.join(" | ")) + "</div>"
         : "")
       + "</div>"
       + "</div>";
@@ -6644,7 +6672,7 @@
 	      + '<div style="padding:12px 14px;background:var(--bg3);border:1px solid ' + (statuses.overallValidationStatus === "NON_COMPLIANT" ? "rgba(239,68,68,0.35)" : statuses.overallValidationStatus === "REVIEW" ? "rgba(245,158,11,0.35)" : "rgba(0,201,167,0.25)") + ';border-radius:var(--r);">'
 	      + '<div style="font-size:10px;font-family:var(--mono);letter-spacing:.08em;color:var(--text3);margin-bottom:6px;">DESIGN STATUS BREAKDOWN</div>'
 	      + '<div style="font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.7;">Geometry constraints: ' + escapeHtml(statuses.geometryConstraintStatus || "APPROVED") + '<br>Duct constraints: ' + escapeHtml(statuses.ductConstraintStatus || "APPROVED") + '<br>Equipment selection: ' + escapeHtml(statuses.equipmentSelectionStatus || "APPROVED") + '<br>Airflow compliance: ' + escapeHtml(statuses.airflowComplianceStatus || "REVIEW") + '</div>'
-	      + '<div style="font-size:13px;font-weight:600;margin-top:6px;color:' + (statuses.overallValidationStatus === "NON_COMPLIANT" ? "var(--accent4)" : statuses.overallValidationStatus === "REVIEW" ? "var(--accent3)" : "var(--accent)") + ';">Overall validation: ' + escapeHtml(statuses.overallValidationStatus || "REVIEW") + "</div>"
+	      + '<div style="font-size:13px;font-weight:600;margin-top:6px;color:' + (statuses.overallValidationStatus === "NON_COMPLIANT" ? "#dc2626" : statuses.overallValidationStatus === "REVIEW" ? "#d97706" : "#16a34a") + ';">Overall validation: ' + escapeHtml(statuses.overallValidationStatus || "REVIEW") + "</div>"
       + '<div style="font-size:11px;color:var(--text2);font-family:var(--mono);line-height:1.5;margin-top:6px;">' + escapeHtml(designConstraints.summary || "Constraint check complete.") + "</div>"
       + (designConstraints.actions && designConstraints.actions.length
         ? '<div style="margin-top:8px;font-size:10px;color:var(--text3);font-family:var(--mono);">Required actions: ' + escapeHtml(designConstraints.actions.join(" | ")) + "</div>"
@@ -6704,7 +6732,7 @@
         ? '<tr><td>Ventilation hardware</td><td class="num">' + formatInt(ventilationAirflow) + "</td><td>CFM</td><td>" + (processAirSelection ? processAirSelection.type + " process fan" : "") + ((processAirSelection && result.dedicatedVentilationSelection) ? " + " : "") + (result.dedicatedVentilationSelection && result.dedicatedVentilationSelection.fan ? escapeHtml(result.dedicatedVentilationSelection.fan.type || "Dedicated ventilation fan") : (!processAirSelection ? "Separate ventilation path recommended" : "")) + "</td></tr>"
         : "")
       + '<tr><td>Optimization note</td><td colspan="3">' + escapeHtml(optimizationNoteText) + "</td></tr>"
-      + '<tr class="total-row"><td><b>Selection status</b></td><td class="num"><b>' + ahuStatus + '</b></td><td colspan="2" style="color:' + (ahu.adequate ? "var(--accent)" : "var(--accent4)") + ';">' + formatInt(conditionedAirflow) + " recirculation CFM @ " + formatInt(ahu.designESP || result.total_esp) + " Pa</td></tr>"
+      + '<tr class="total-row"><td><b>Selection status</b></td><td class="num"><b>' + ahuStatus + '</b></td><td colspan="2" style="color:' + (ahu.adequate ? "#16a34a" : "#dc2626") + ';">' + formatInt(conditionedAirflow) + " recirculation CFM @ " + formatInt(ahu.designESP || result.total_esp) + " Pa</td></tr>"
       + "</tbody></table>"
       + clusterSchedule;
   }
@@ -6720,16 +6748,16 @@
     const symbolPrefix = layout.symbolPrefix || "S";
 
     const coordinates = layout.supplies.map(function (point, index) {
-      return '<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(0,212,170,0.08);border:1px solid rgba(0,212,170,0.2);border-radius:3px;color:var(--accent);">' + symbolPrefix + (index + 1) + ": (" + point.x + ", " + point.y + ")</span>";
+      return '<span style="font-family:\'JetBrains Mono\',monospace;font-size:9px;padding:2px 6px;background:rgba(22,163,74,0.08);border:1px solid rgba(22,163,74,0.2);border-radius:3px;color:#16a34a;">' + symbolPrefix + (index + 1) + ": (" + point.x + ", " + point.y + ")</span>";
     }).join("");
 
     const returnCoordinates = layout.returns.coords.map(function (point, index) {
-      return '<span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:3px;color:var(--accent3);">R' + (index + 1) + ": (" + point.x + ", " + point.y + ")</span>";
+      return '<span style="font-family:\'JetBrains Mono\',monospace;font-size:9px;padding:2px 6px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:3px;color:#d97706;">R' + (index + 1) + ": (" + point.x + ", " + point.y + ")</span>";
     }).join("");
 
     byId("diffuser-detail").innerHTML =
       '<div style="display:grid;grid-template-columns:1.2fr 1fr;gap:16px;align-items:start;">'
-      + '<div><svg width="100%" viewBox="0 0 560 340" style="display:block;background:#fff;border:1px solid var(--border);border-radius:var(--r);">' + DiffuserLayout.renderLayoutSvg(parseFloat(result.inputs.len), parseFloat(result.inputs.wid), layout) + "</svg></div>"
+      + '<div><svg width="100%" viewBox="0 0 560 340" style="display:block;background:#fff;border:1px solid #e2e8f0;border-radius:6px;">' + DiffuserLayout.renderLayoutSvg(parseFloat(result.inputs.len), parseFloat(result.inputs.wid), layout) + "</svg></div>"
       + '<div>'
       + '<table class="calc-table"><tbody>'
       + '<tr><td>Supply outlets</td><td class="num">' + formatInt(layout.diffuserCount) + " nos</td></tr>"
@@ -6749,12 +6777,12 @@
       + '<tr><td>Wall offset</td><td class="num">' + formatNumber(layout.wallOffset, 2) + " m</td></tr>"
       + '<tr><td>Estimated throw</td><td class="num">' + formatNumber(layout.throwDistance, 2) + " m</td></tr>"
       + '<tr><td>Required throw</td><td class="num">' + formatNumber(layout.requiredThrow, 2) + " m</td></tr>"
-      + '<tr><td>Airflow band check</td><td class="num" style="color:' + (layout.cfmRangePass ? "var(--accent)" : "var(--accent3)") + ';">' + (layout.cfmRangePass ? "PASS" : "REVIEW") + "</td></tr>"
-      + '<tr><td>Undersizing protection</td><td class="num" style="color:' + (layout.undersizingProtected ? "var(--accent)" : "var(--accent4)") + ';">' + (layout.undersizingProtected ? "ACTIVE" : "REVIEW") + "</td></tr>"
-      + '<tr><td>Spacing check</td><td class="num" style="color:' + (layout.spacingPass ? "var(--accent)" : "var(--accent4)") + ';">' + (layout.spacingPass ? "PASS" : "FAIL") + "</td></tr>"
-      + '<tr><td>Throw check</td><td class="num" style="color:' + (layout.throwPass ? "var(--accent)" : "var(--accent4)") + ';">' + (layout.throwPass ? "PASS" : "FAIL") + "</td></tr>"
-      + '<tr><td>Coordinate check</td><td class="num" style="color:' + ((layout.coordinateValidation && layout.coordinateValidation.status) === "REVIEW" ? "var(--accent3)" : "var(--accent)") + ';">' + escapeHtml((layout.coordinateValidation && layout.coordinateValidation.status) || "OK") + (layout.overlapCount ? " · " + formatInt(layout.overlapCount) + " overlap" : "") + "</td></tr>"
-      + '<tr><td>Design feasibility</td><td class="num" style="color:' + (designConstraints.status === "REJECTED" ? "var(--accent4)" : designConstraints.status === "REVIEW" ? "var(--accent3)" : "var(--accent)") + ';">' + escapeHtml(designConstraints.status) + "</td></tr>"
+      + '<tr><td>Airflow band check</td><td class="num" style="color:' + (layout.cfmRangePass ? "#16a34a" : "#d97706") + ';">' + (layout.cfmRangePass ? "PASS" : "REVIEW") + "</td></tr>"
+      + '<tr><td>Undersizing protection</td><td class="num" style="color:' + (layout.undersizingProtected ? "#16a34a" : "#dc2626") + ';">' + (layout.undersizingProtected ? "ACTIVE" : "REVIEW") + "</td></tr>"
+      + '<tr><td>Spacing check</td><td class="num" style="color:' + (layout.spacingPass ? "#16a34a" : "#dc2626") + ';">' + (layout.spacingPass ? "PASS" : "FAIL") + "</td></tr>"
+      + '<tr><td>Throw check</td><td class="num" style="color:' + (layout.throwPass ? "#16a34a" : "#dc2626") + ';">' + (layout.throwPass ? "PASS" : "FAIL") + "</td></tr>"
+      + '<tr><td>Coordinate check</td><td class="num" style="color:' + ((layout.coordinateValidation && layout.coordinateValidation.status) === "REVIEW" ? "#d97706" : "#16a34a") + ';">' + escapeHtml((layout.coordinateValidation && layout.coordinateValidation.status) || "OK") + (layout.overlapCount ? " · " + formatInt(layout.overlapCount) + " overlap" : "") + "</td></tr>"
+      + '<tr><td>Design feasibility</td><td class="num" style="color:' + (designConstraints.status === "REJECTED" ? "#dc2626" : designConstraints.status === "REVIEW" ? "#d97706" : "#16a34a") + ';">' + escapeHtml(designConstraints.status) + "</td></tr>"
       + '<tr><td>Return grille type</td><td class="num">' + layout.returns.type + "</td></tr>"
       + '<tr><td>Return grille size</td><td class="num">' + formatNumber(layout.returns.width, 2) + " x " + formatNumber(layout.returns.height, 2) + " m</td></tr>"
       + '<tr><td>Return total area</td><td class="num">' + formatNumber(layout.returns.totalArea, 3) + " m2</td></tr>"
@@ -6771,8 +6799,8 @@
             : "Required throw is not achieved inside the protected outlet-airflow band. Use a higher-throw device or revise zoning before increasing diffuser count.")
           + "</div>"
         : "")
-      + '<div style="margin-top:12px;"><div style="font-size:9.5px;font-family:var(--mono);color:var(--accent);letter-spacing:.07em;margin-bottom:6px;">SUPPLY COORDINATES</div><div style="display:flex;flex-wrap:wrap;gap:4px;max-height:92px;overflow:auto;padding-right:4px;">' + coordinates + "</div></div>"
-      + '<div style="margin-top:12px;"><div style="font-size:9.5px;font-family:var(--mono);color:var(--accent3);letter-spacing:.07em;margin-bottom:6px;">RETURN COORDINATES</div><div style="display:flex;flex-wrap:wrap;gap:4px;max-height:72px;overflow:auto;padding-right:4px;">' + returnCoordinates + "</div></div>"
+      + '<div style="margin-top:12px;"><div class="diffuser-coord-label" style="margin-bottom:6px;color:#16a34a;">SUPPLY COORDINATES</div><div class="diffuser-coord-chips">' + coordinates + "</div></div>"
+      + '<div style="margin-top:12px;"><div class="diffuser-coord-label" style="margin-bottom:6px;color:#d97706;">RETURN COORDINATES</div><div class="diffuser-coord-chips">' + returnCoordinates + "</div></div>"
       + "</div></div>";
   }
 
@@ -7020,7 +7048,7 @@
   function clonedSvgMarkup(id, viewBox, height) {
     const element = byId(id);
     if (!element) {
-      return '<p style="color:var(--text3);font-family:var(--mono);font-size:12px;">Graphic unavailable</p>';
+      return '<p style="color:#94a3b8;font-family:\'JetBrains Mono\',monospace;font-size:12px;">Graphic unavailable</p>';
     }
     return '<div class="report-visual"><svg width="100%" height="' + height + '" viewBox="' + viewBox + '" style="display:block;font-family:var(--mono);">' + element.innerHTML + "</svg></div>";
   }
@@ -7036,10 +7064,10 @@
 
   function validationStatusColor(status) {
     return status === "NON_COMPLIANT"
-      ? "var(--accent4)"
+      ? "#dc2626"
       : status === "REVIEW"
-        ? "var(--accent3)"
-        : "var(--accent)";
+        ? "#d97706"
+        : "#16a34a";
   }
 
   function buildValidationReportMarkup(result) {
@@ -7094,21 +7122,107 @@
 
   // -------------------------------------------------------------------
   // ASHRAE engine — full sized design report block.
-  // Pulls from window.__lastAshraeDesign (set by aiDesignerUI.js when the
-  // user clicks "Generate full design" or "Auto-fix"). If nothing has
-  // been generated yet, emits a placeholder so the section still appears
-  // in the PDF index and the user knows where to find it.
   // -------------------------------------------------------------------
-  function buildAshraeDesignReportMarkup() {
+  // ASHRAE ENGINE REPORT — pulls from window.__lastAshraeDesign (set by
+  // aiDesignerUI.js "Generate full design" / "Auto-fix"), or from the
+  // live #ai-engine-result DOM element, or builds a rich fallback from
+  // the current finalized calculation result so the section is never blank.
+  // -------------------------------------------------------------------
+  function buildAshraeDesignReportMarkup(result) {
     const wrap = (typeof window !== "undefined") ? window : {};
+    // Also stash _lastCalcResult so the fallback can always find it
+    if (result && !wrap._lastCalcResult) { wrap._lastCalcResult = result; }
     const payload = wrap.__lastAshraeDesign || wrap.__lastAshraeAutofix || null;
+
+    // ── Fallback 1: capture whatever the AI Design Studio rendered on screen ──
     if (!payload || !payload.design) {
-      return ''
-        + '<div class="report-inline-note">'
-        + 'No ASHRAE-engine design has been generated for this session yet. '
-        + 'Open the <b>AI Design Studio</b> panel and click <b>Generate full design</b> '
-        + '(or <b>Auto-fix</b>) before printing this report so the engine output is captured here.'
+      const engineEl = (typeof document !== "undefined") && document.getElementById("ai-engine-result");
+      const engineHtml = engineEl ? engineEl.innerHTML.trim() : "";
+      if (engineHtml && engineHtml.length > 40) {
+        return '<div class="report-inline-note" style="background:#eff6ff;border-left-color:#3b82f6;">'
+          + '<b>Source:</b> AI Design Studio live result (captured from screen at print time).'
+          + '</div>'
+          + '<div style="margin-top:12px;">' + engineHtml + '</div>';
+      }
+    }
+
+    // ── Fallback 2: build a comprehensive design summary from _lastCalcResult ──
+    if (!payload || !payload.design) {
+      const calc = wrap._lastCalcResult;
+      if (!calc) {
+        return '<div class="report-inline-note">'
+          + 'No ASHRAE-engine design has been generated for this session. '
+          + 'Open the <b>AI Design Studio</b> panel and click <b>Generate full design</b> '
+          + 'before printing to capture the engine output here.'
+          + '</div>';
+      }
+      const fd = (calc.finalDesign || {});
+      const loads = fd.loads || {};
+      const airflow = fd.airflow || {};
+      const fans = fd.fans || {};
+      const esp = fd.esp || {};
+      const equip = fd.equipment || {};
+      const vent = fd.ventilation || {};
+      const finalized = ensureFinalizedResult(calc, { promoteEnergySimulation: false });
+      const validation = finalized.validationState || finalized.validation || {};
+
+      const syntheticCards = '<div class="report-summary-grid">'
+        + reportSummaryCard("Cooling load", formatNumber((loads.totalLoadW || calc.totalLoad || 0) / 1000, 2) + " kW", formatInt(loads.totalLoadW || calc.totalLoad || 0) + " W total")
+        + reportSummaryCard("Design duty", formatNumber(loads.trFinal || calc.tr_final || 0, 2) + " TR", "Coil duty at cooling airflow")
+        + reportSummaryCard("Selected AHU", equip.selectedAhuModel || (calc.equipmentSelection && calc.equipmentSelection.ahu && calc.equipmentSelection.ahu.model) || "—", formatNumber(equip.selectedAhuTR || calc.tr_catalog || 0, 1) + " TR catalog")
+        + reportSummaryCard("Supply airflow", formatInt(airflow.coolingCFM || calc.cfm_cooling_coil || 0) + " CFM", formatNumber(
+            airflow.cfmPerTR
+            || (calc.airflowBasis && calc.airflowBasis.designCFMPerTR)
+            || safeDiv(airflow.coolingCFM || calc.cfm_cooling_coil || 0, Math.max(loads.trFinal || calc.tr_equipment || calc.tr_final || 0.1, 0.1), 0),
+            0) + " CFM/TR")
+        + reportSummaryCard("Total ESP", formatInt(esp.totalPa || calc.total_esp || 0) + " Pa", formatNumber((esp.totalPa || calc.total_esp || 0) / 249.09, 2) + " in.w.g.")
+        + reportSummaryCard("Fan power", formatNumber(fans.totalFanKW || 0, 2) + " kW", formatNumber(fans.specificFanPowerKWPerTR || 0, 2) + " kW/TR")
+        + reportSummaryCard("Ventilation OA", formatInt(calc.fresh_total_cfm || airflow.ventilationCFM || 0) + " CFM", (finalized.ventilationComplianceStatus || "COMPLIANT") + " · " + (finalized.achComplianceStatus || "ADVISORY"))
+        + reportSummaryCard("Validation", validation.status || "REVIEW", "Confidence " + formatNumber((validation.confidenceScore || 0) * 100, 0) + "%")
         + '</div>';
+
+      // Input design basis table
+      const inp = calc.inputs || {};
+      const inpTable = '<table style="width:100%;border-collapse:collapse;margin-top:8px;">'
+        + '<thead><tr><th>Parameter</th><th>Value</th><th>Parameter</th><th>Value</th></tr></thead>'
+        + '<tbody>'
+        + '<tr><td>Room dimensions</td><td class="num">' + inp.len + ' × ' + inp.wid + ' × ' + inp.ht + ' m</td><td>Floor area</td><td class="num">' + formatNumber(calc.area || 0, 1) + ' m²</td></tr>'
+        + '<tr><td>Outdoor DBT / RH</td><td class="num">' + inp.out_dbt + ' °C / ' + formatNumber(calc.outdoorRelativeHumidity || 0, 0) + ' %</td><td>Indoor DBT / RH</td><td class="num">' + inp.in_dbt + ' °C / ' + inp.in_rh + ' %</td></tr>'
+        + '<tr><td>Occupants / activity</td><td class="num">' + inp.occ + ' persons · ' + String(inp.occ_act).replace(/_/g, " ") + '</td><td>Fresh air</td><td class="num">' + inp.fresh_cfm + ' CFM/person</td></tr>'
+        + '<tr><td>Lighting / Equipment</td><td class="num">' + inp.lighting + ' W/m² / ' + inp.equip + ' W/m²</td><td>Roof exposure</td><td class="num">' + String(inp.roof_exp).replace(/_/g, " ") + '</td></tr>'
+        + '<tr><td>Wall U-value / Roof U-value</td><td class="num">' + inp.u_wall + ' / ' + inp.u_roof + ' W/m²K</td><td>Compliance mode</td><td class="num">' + escapeHtml(calc.complianceMode || "comfort_ventilation") + '</td></tr>'
+        + '</tbody></table>';
+
+      // Load component summary
+      const sensible = formatInt(calc.totalS || loads.sensibleW || 0);
+      const latent   = formatInt(calc.totalL || loads.latentW || 0);
+      const total    = formatInt(calc.totalLoad || loads.totalLoadW || 0);
+      const shr      = formatNumber(calc.shr || (calc.totalS / Math.max(calc.totalLoad, 1)) || 0, 3);
+
+      return '<div class="report-inline-note" style="background:#eff6ff;border-left-color:#3b82f6;color:#1e3a8a;">'
+        + '<b>Data source:</b> Finalized calculation result (ASHRAE CLTD method) — engine/ashrae full-design API result will appear here once generated from the AI Design Studio.'
+        + '</div>'
+        + '<div class="report-subtitle">System Design Summary</div>'
+        + syntheticCards
+        + '<div class="report-grid-2" style="margin-top:16px;">'
+        + '<div><div class="report-subtitle">Design Basis</div>' + inpTable + '</div>'
+        + '<div><div class="report-subtitle">Load Summary</div>'
+        + '<table style="width:100%;border-collapse:collapse;">'
+        + '<thead><tr><th>Metric</th><th>Value</th><th>Unit</th></tr></thead>'
+        + '<tbody>'
+        + '<tr><td>Total sensible</td><td class="num">' + sensible + '</td><td>W</td></tr>'
+        + '<tr><td>Total latent</td><td class="num">' + latent + '</td><td>W</td></tr>'
+        + '<tr><td>Grand total</td><td class="num"><b>' + total + '</b></td><td>W</td></tr>'
+        + '<tr><td>System SHR</td><td class="num">' + shr + '</td><td>—</td></tr>'
+        + '<tr><td>Design TR</td><td class="num">' + formatNumber(loads.trFinal || calc.tr_final || 0, 2) + '</td><td>TR</td></tr>'
+        + '<tr><td>Catalog TR (selected)</td><td class="num"><b>' + formatNumber(loads.trCatalog || calc.tr_catalog || 0, 1) + '</b></td><td>TR</td></tr>'
+        + '<tr><td>Cooling airflow</td><td class="num">' + formatInt(airflow.coolingCFM || calc.cfm_cooling_coil || 0) + '</td><td>CFM</td></tr>'
+        + '<tr><td>Ventilation OA</td><td class="num">' + formatInt(calc.fresh_total_cfm || airflow.ventilationCFM || 0) + '</td><td>CFM</td></tr>'
+        + '<tr><td>ACH provided</td><td class="num">' + formatNumber(airflow.ach || calc.ach || 0, 1) + '</td><td>ACH</td></tr>'
+        + '<tr><td>Total ESP</td><td class="num">' + formatInt(esp.totalPa || calc.total_esp || 0) + '</td><td>Pa</td></tr>'
+        + '<tr><td>Fan motor power</td><td class="num">' + formatNumber(fans.totalFanKW || 0, 2) + '</td><td>kW</td></tr>'
+        + '</tbody></table>'
+        + '</div></div>';
     }
     const design = payload.design;
     const a = design.aggregate || {};
@@ -7356,6 +7470,7 @@
         }).join("") + '</div>'
         : '<div class="report-inline-note">No alternative concepts available for this room yet.</div>')
       + '<div class="report-subtitle">' + (optimizationBacked ? "Scenario Comparison" : "Option Comparison") + '</div>'
+      + '<div class="s16-scenario-wrap">'
       + (optimizationBacked && scenarioResults.length
         ? optimizationScenarioTableMarkup(scenarioResults, preferredOptionKey)
         : options.length
@@ -7364,7 +7479,8 @@
             return '<tr><td>' + escapeHtml(option.title || "Option") + (option.key === preferredOptionKey ? ' <span class="admin-chip">PREFERRED</span>' : "") + '</td><td>' + escapeHtml(option.systemType || "—") + '</td><td class="num">' + formatInt(option.airflowCfm || 0) + '</td><td class="num">' + formatNumber(option.ach || 0, 1) + '</td><td class="num">' + (option.capexDeltaPercent > 0 ? "+" : "") + formatInt(option.capexDeltaPercent || 0) + '%</td><td class="num">' + (option.energyDeltaPercent > 0 ? "+" : "") + formatInt(option.energyDeltaPercent || 0) + '%</td><td class="num">C ' + formatInt(option.costScore || 0) + ' | E ' + formatInt(option.efficiencyScore || 0) + ' | Q ' + formatInt(option.complianceScore || 0) + '</td><td class="num">' + escapeHtml(option.complianceStatus || "COMPLIANT") + (option.confidenceScore != null ? ' | ' + formatNumber(option.confidenceScore * 100, 0) + '%' : "") + '</td><td>' + escapeHtml(option.scope || "—") + '</td></tr>';
           }).join("")
           + '</tbody></table></div>'
-        : '<div class="report-inline-note">Option-comparison table unavailable.</div>');
+        : '<div class="report-inline-note">Option-comparison table unavailable.</div>')
+      + '</div>';
   }
 
   function defaultEnergyBinHours() {
@@ -7425,9 +7541,20 @@
 	      throw new Error("Energy input recirculation airflow differs from finalDesign airflow by more than 1%.");
 	    }
 
+    // Build a physics-derived calculationId when none is set on the result
+    // (optimization scenario runs get a fresh calculateRoom result without the
+    // UI-assigned calculationId). The key encodes TR, CFM, and ESP so the
+    // server never returns a cached report for a scenario with different values.
+    const scenarioPhysicsKey = result.calculationId
+      ? result.calculationId
+      : ("opt-" + roundTo(finalDesign.loads.trFinal || 0, 2)
+        + "-" + roundTo(finalDesign.airflow.recirculationCFM || 0, 0)
+        + "-" + roundTo(finalDesign.esp.totalPa || 0, 0)
+        + "-" + roundTo(conditionedFanDesignKw || 0, 3));
+
 	    return {
       roomId: room ? room.id : "",
-      calculationId: result.calculationId,
+      calculationId: scenarioPhysicsKey,
       projectName: project ? project.name : "HVAC Project",
       roomName: room ? room.name : "Room",
       bin_data: buildEnergyBinData(result),
@@ -7487,7 +7614,11 @@
   }
 
   function buildAiDesignAssistant(result, advisor) {
-    const finalized = ensureFinalizedResult(result || {}, { promoteEnergySimulation: false });
+    // promoteEnergySimulation: true so that result.energySimulation is promoted
+    // to result.finalEnergyResult when finalEnergyResult is missing — without
+    // this the AI section always shows annualKwh = 0 even after a successful
+    // energy simulation that only populated energySimulation.
+    const finalized = ensureFinalizedResult(result || {}, { promoteEnergySimulation: true });
     const finalDesign = finalized.finalDesign;
     const finalEnergy = finalized.finalEnergyResult || {};
     const basis = finalized.airflowBasis || {};
@@ -8007,10 +8138,10 @@
       summary.innerHTML = '<p class="schematic-empty">Run calculations to generate the active-room 3D schematic.</p>';
       schedule.innerHTML = '<p class="schematic-empty">AHU deployment and per-zone routing notes will appear here after calculation.</p>';
       if (note) {
-        note.textContent = "Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset the camera. Use Outside View for an uncluttered duct overview and Inside View to turn the ceiling on and look into the room.";
+        note.textContent = "Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset the camera. Outside View uses a Revit-style cutaway shell; Inside View keeps the same symbols while looking from inside the room.";
       }
       if (disclaimer) {
-        disclaimer.textContent = "Visualization only. Use this for coordination and presentation, not for IFC, shop, fabrication, or standards approval.";
+        disclaimer.textContent = "Visualization only. The model uses calculated dimensions and symbol categories for coordination and presentation; it is not an IFC export, shop drawing, or standards approval model.";
       }
       if (window.Schematic3D && window.Schematic3D.render) {
         window.Schematic3D.render(canvas, null);
@@ -8060,10 +8191,10 @@
     setMetric("m-schematic-zones", formatInt(autoZoning.zoneCount || 1));
 
     if (disclaimer) {
-      disclaimer.textContent = "Visualization only. Room envelope, deployed AHU count, zone count, and displayed duct sections follow the active result; routing geometry, camera view, and animated air streams are illustrative and not a standards-based or fabrication-issued layout.";
+      disclaimer.textContent = "Visualization only. Room envelope, deployed AHU count, diffuser count, zone count, and displayed duct sections follow the active result; routing geometry, camera view, and animated air streams are illustrative and not a standards-based or fabrication-issued layout.";
     }
     if (note) {
-      note.textContent = "Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset the camera. Outside View hides the ceiling for clearer duct layouts; Inside View turns the ceiling on and places the camera within the room. Blue particles show the recirculation / supply stream; warm red particles show return air.";
+      note.textContent = "Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset the camera. Outside View uses a cutaway room shell like a BIM coordination model; Inside View keeps the same W, WIN, AHU, SD, SA-M, SA-B, RA-M, and RA-B symbols. Blue particles show the recirculation / supply stream; warm red particles show return air.";
     }
 
     summary.innerHTML =
@@ -8083,6 +8214,7 @@
           ? "Visualized as distributed extract modules because process air is handled outside the comfort duct network."
           : "Process air trunk section follows the active result.")
         : "No separate process-air duty in the active room result.") + "</td></tr>"
+      + '<tr><td>Rendered symbol set</td><td class="num">W / WIN / AHU / SD</td><td>MEP</td><td>SA-M and SA-B identify main and branch supply ducts; RA-M and RA-B identify main and branch return ducts.</td></tr>'
       + '<tr class="total-row"><td><b>Visualization basis</b></td><td class="num"><b>' + formatInt(result.cfm_conditioned || 0) + " CFM</b></td><td><b>recirculation air</b></td><td>Exact room size, deployed AHUs, and displayed duct sections follow the result data. Routing and motion are illustrative only.</td></tr>"
       + '</tbody></table>';
 
@@ -8544,7 +8676,7 @@
         + "<dt>Latitude</dt><dd>" + result.inputs.out_lat + " deg</dd>"
         + "<dt>Solar design day</dt><dd>Day " + result.inputs.solar_day + "</dd>"
         + "<dt>Solar design hour</dt><dd>" + result.inputs.solar_hour + ":00</dd>"
-        + "<dt>Glass SC / CLF</dt><dd>" + result.inputs.sc_glass + " / " + result.inputs.clf_shade + "</dd>"
+        + "<dt>Glass SHGC / Window CLF</dt><dd>" + result.inputs.sc_glass + " / " + result.inputs.clf_shade + "</dd>"
         + "<dt>AHU group</dt><dd>" + result.inputs.ahu_group + "</dd>"
         + "<dt>Compliance mode</dt><dd>" + escapeHtml(result.complianceMode || result.finalDesign && result.finalDesign.complianceMode || "comfort_ventilation") + "</dd>"
         + "<dt>ACH requirement</dt><dd>" + escapeHtml(result.achRequirementMode || result.finalDesign && result.finalDesign.achRequirementMode || "advisory") + "</dd>"
@@ -8590,11 +8722,11 @@
         + '<div class="report-subtitle">State Point Data</div>' + innerHtml("psychro-chart-table")
       )
       + reportBlock("13 · MULTI-ROOM",
-        '<div class="report-grid-2">'
-        + '<div><div class="report-subtitle">Project Summary</div>' + innerHtml("project-summary-table") + "</div>"
-        + '<div><div class="report-subtitle">AHU Grouping</div>' + innerHtml("ahu-group-summary") + "</div>"
-        + "</div>"
-        + '<div class="report-subtitle">Room Schedule</div><div class="table-wrap">' + roomTable + "</div>",
+        '<div class="s13-wrap">'
+        + '<div class="report-subtitle">Project Summary</div><div class="table-wrap">' + innerHtml("project-summary-table") + '</div>'
+        + '<div class="report-subtitle">AHU Grouping</div><div class="table-wrap">' + innerHtml("ahu-group-summary") + '</div>'
+        + '<div class="report-subtitle">Room Schedule</div><div class="table-wrap">' + roomTable + '</div>'
+        + '</div>',
         "report-page-break"
       )
       + reportBlock("14 · BOQ / COSTING",
@@ -8620,168 +8752,349 @@
         "report-page-break"
       )
       + reportBlock("16A · ASHRAE ENGINE — FULL SIZED DESIGN",
-        buildAshraeDesignReportMarkup(),
+        buildAshraeDesignReportMarkup(result),
         "report-page-break"
       )
       + reportBlock("17 · 3D SCHEMATIC SUMMARY",
-        firstResultsGridMarkup("p-schematic3d")
-        + '<div class="report-grid-2">'
-        + '<div><div class="report-subtitle">Schematic Basis</div>' + innerHtml("schematic3d-summary") + '</div>'
-        + '<div><div class="report-subtitle">AHU / Zone Schedule</div>' + innerHtml("schematic3d-schedule") + '</div>'
-        + '</div>'
+        '<div class="s17-wrap">'
+        + firstResultsGridMarkup("p-schematic3d")
+        + '<div class="report-subtitle">Schematic Basis</div><div class="table-wrap">' + innerHtml("schematic3d-summary") + '</div>'
+        + '<div class="report-subtitle">AHU / Zone Schedule</div>' + innerHtml("schematic3d-schedule")
         + '<div class="report-inline-note">' + escapeHtml(byId("schematic3d-disclaimer") ? byId("schematic3d-disclaimer").textContent : "3D schematic is a coordination visual and not a fabrication drawing.") + '</div>'
+        + '</div>'
       )
       + '<div class="report-disclaimer">This PDF package is intended to capture the full design workflow from room input through costing, including psychrometric and diffuser layout visuals. Final procurement and IFC issue should still be checked against project-specific manufacturer data and site coordination constraints.</div>'
       + '<div class="report-footer">' + footerLine + "</div>";
   }
 
   function printableReportDocument(reportHtml) {
-    const styleMarkup = Array.prototype.slice.call(document.querySelectorAll("style")).map(function (style) {
-      return style.outerHTML;
-    }).join("\n");
     // ----------------------------------------------------------------
-    // PDF / print stylesheet — applied AFTER the existing styles so it
-    // overrides them. Goal: an engineering-report look with branded
-    // header on every page, KPI tiles, section ribbons, zebra tables,
-    // and footer page numbers. We do NOT modify the live UI panel.
+    // Self-contained print stylesheet. We deliberately do NOT inherit
+    // the live page's <style> tags — they are 1000+ lines of dark-theme
+    // UI rules that conflict with print and are what made earlier PDFs
+    // look messy. This block defines every class the report markup
+    // actually uses, from scratch, in a print-safe way.
     // ----------------------------------------------------------------
     const pdfStyle = ''
+      // ═══════════════════════════════════════════════════════════
+      // PAGE SETUP — A4, running heads, page counter
+      // ═══════════════════════════════════════════════════════════
       + '@page {'
       +   'size: A4;'
-      +   'margin: 18mm 14mm 22mm 14mm;'
+      +   'margin: 20mm 18mm 18mm 18mm;'
       +   '@top-left {'
-      +     'content: "Musk-IT  ·  HVAC Design Calculation Report";'
-      +     'font-family: \"Inter\", \"Segoe UI\", Arial, sans-serif;'
-      +     'font-size: 9pt; color: #475569; letter-spacing: .04em;'
+      +     'content: "Musk-IT";'
+      +     'font-family: "Inter", "Segoe UI", Arial, sans-serif;'
+      +     'font-size: 8pt; font-weight: 700; color: #1e40af; letter-spacing: .04em;'
+      +   '}'
+      +   '@top-center {'
+      +     'content: "HVAC Design Calculation Report";'
+      +     'font-family: "Inter", Arial, sans-serif;'
+      +     'font-size: 7.5pt; color: #94a3b8; letter-spacing: .04em;'
       +   '}'
       +   '@top-right {'
-      +     'content: "hvac.muskit.in"; font-family: \"Inter\", Arial, sans-serif;'
-      +     'font-size: 9pt; color: #475569;'
+      +     'content: "hvac.muskit.in";'
+      +     'font-family: "JetBrains Mono", "Consolas", monospace;'
+      +     'font-size: 7.5pt; color: #94a3b8; letter-spacing: .06em;'
       +   '}'
       +   '@bottom-left {'
-      +     'content: "Generated " counter(page) " · Confidential — for project use only";'
-      +     'font-family: \"Inter\", Arial, sans-serif; font-size: 8.5pt; color: #64748b;'
+      +     'content: "Confidential — For project use only";'
+      +     'font-family: "Inter", Arial, sans-serif; font-size: 7pt; color: #cbd5e1; letter-spacing: .04em;'
+      +   '}'
+      +   '@bottom-center {'
+      +     'content: "";'
+      +     'border-top: 0.5pt solid #e2e8f0;'
       +   '}'
       +   '@bottom-right {'
       +     'content: "Page " counter(page) " of " counter(pages);'
-      +     'font-family: \"Inter\", Arial, sans-serif; font-size: 8.5pt; color: #64748b;'
+      +     'font-family: "JetBrains Mono", monospace; font-size: 7.5pt; color: #94a3b8;'
       +   '}'
       + '}'
+      + '@page :first {'
+      +   'margin-top: 0;'
+      +   '@top-left { content: ""; }'
+      +   '@top-center { content: ""; border: none; }'
+      +   '@top-right { content: ""; }'
+      +   '@bottom-left { content: ""; }'
+      +   '@bottom-center { content: ""; border: none; }'
+      +   '@bottom-right { content: ""; }'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // CSS CUSTOM PROPERTIES — resolve every var() used in inline HTML
+      // ═══════════════════════════════════════════════════════════
+      + ':root {'
+      +   '--text:  #0f172a;'
+      +   '--text2: #334155;'
+      +   '--text3: #64748b;'
+      +   '--mono:  "JetBrains Mono", "Consolas", monospace;'
+      +   '--bg3:   #f8fafc;'
+      +   '--border: #e2e8f0;'
+      +   '--r:     6px;'
+      +   '--accent:  #16a34a;'
+      +   '--accent2: #2563eb;'
+      +   '--accent3: #d97706;'
+      +   '--accent4: #dc2626;'
+      +   '--accent5: #7c3aed;'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // BASE RESET & TYPOGRAPHY
+      // ═══════════════════════════════════════════════════════════
+      + '*, *::before, *::after { box-sizing: border-box; }'
       + 'html, body {'
-      +   'background: #ffffff !important;'
+      +   'margin: 0; padding: 0;'
+      +   'background: #ffffff;'
       +   '-webkit-print-color-adjust: exact;'
       +   'print-color-adjust: exact;'
       +   'color: #0f172a;'
-      +   'font-family: \"Inter\", \"Segoe UI\", \"Helvetica Neue\", Arial, sans-serif;'
-      +   'font-size: 10.5pt;'
-      +   'line-height: 1.55;'
+      +   'font-family: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;'
+      +   'font-size: 9.5pt;'
+      +   'line-height: 1.6;'
       + '}'
-      + '.shell, .main { display: block !important; overflow: visible !important; padding: 0 !important; }'
-      + '#p-report { display: block !important; padding: 0 !important; background: #fff !important; }'
-      + '#report-content { max-width: none !important; padding: 0 !important; }'
-      + '.btn-row, .section-note, .btn { display: none !important; }'
+      + '#report-content { max-width: none; padding: 0; margin: 0; }'
+      + 'h1,h2,h3,h4,h5,h6,p,ul,ol,dl,dt,dd,figure,blockquote { margin: 0; padding: 0; }'
+      + 'a { color: #1d4ed8; text-decoration: none; }'
+      + 'b, strong { font-weight: 700; }'
 
-      // ---- Cover ----
-      // Keep the existing 2-column grid in the markup; we only restyle the
-      // background and typography. The earlier override forced flex-column
-      // and squashed the grid, producing the messy split-text cover.
+      // ═══════════════════════════════════════════════════════════
+      // COVER PAGE  — full-bleed, dark gradient, page-break-after
+      // ═══════════════════════════════════════════════════════════
       + '.report-cover-shell {'
+      +   'position: relative;'
       +   'page-break-after: always;'
-      +   'background: linear-gradient(135deg, #0b1e3a 0%, #173a73 55%, #1e40af 100%) !important;'
+      +   'break-after: page;'
+      +   'background: linear-gradient(155deg, #040d1e 0%, #0a1f42 35%, #0e3070 68%, #1848b0 100%) !important;'
       +   'color: #f8fafc !important;'
+      +   'margin: 0 -18mm 24mm -18mm !important;'
+      +   'width: calc(100% + 36mm) !important;'
+      +   'padding: 0 !important;'
       +   'border-radius: 0 !important;'
-      +   'min-height: 0;'
       +   'overflow: hidden;'
       + '}'
       + '.report-cover-shell::before { display: none !important; }'
+
+      // Top zone — all cover zones use 30mm horiz padding (18mm bleed + 12mm inner)
       + '.report-cover-top {'
-      +   'display: grid !important;'
-      +   'grid-template-columns: 1.15fr 0.85fr !important;'
-      +   'gap: 0 !important;'
+      +   'display: block !important;'
+      +   'grid-template-columns: none !important;'
+      +   'padding: 0 !important;'
       + '}'
       + '.report-cover-title-zone {'
-      +   'padding: 34px 38px !important; color: #f8fafc !important;'
+      +   'display: block !important;'
+      +   'padding: 18mm 30mm 10mm 30mm !important;'
+      +   'background: transparent !important;'
+      +   'border: none !important;'
+      +   'color: #f8fafc !important;'
+      +   'width: 100% !important;'
+      + '}'
+      + '.report-cover-brand, .report-cover-brand-card {'
+      +   'display: block !important;'
+      +   'background: transparent !important;'
+      +   'border: none !important;'
+      +   'color: #f8fafc !important;'
+      +   'width: 100% !important;'
+      +   'padding: 8mm 30mm 8mm 30mm !important;'
+      +   'border-top: 1px solid rgba(255,255,255,0.12) !important;'
       + '}'
       + '.report-cover-eyebrow {'
-      +   'font-family: \"JetBrains Mono\", \"Consolas\", monospace;'
-      +   'font-size: 8.5pt; letter-spacing: .20em; text-transform: uppercase;'
-      +   'color: #93c5fd !important; margin-bottom: 14px;'
-      +   'white-space: normal;'
+      +   'display: block;'
+      +   'font-family: "JetBrains Mono", monospace;'
+      +   'font-size: 7.5pt; letter-spacing: .28em; text-transform: uppercase;'
+      +   'color: #7dd3fc !important; margin: 0 0 12px 0;'
       + '}'
       + '.report-cover-title {'
-      +   'font-size: 32pt; font-weight: 800; line-height: 1.08; letter-spacing: -0.02em;'
-      +   'color: #ffffff !important; margin: 0 0 14px 0;'
+      +   'display: block;'
+      +   'font-size: 32pt; font-weight: 800; line-height: 1.05; letter-spacing: -0.025em;'
+      +   'color: #ffffff !important; margin: 0 0 12px 0;'
       + '}'
       + '.report-cover-subtitle {'
-      +   'color: #cfe0f8 !important; font-size: 10.5pt; line-height: 1.55;'
-      +   'max-width: 100%;'
+      +   'display: block;'
+      +   'color: #bfdbfe !important; font-size: 10pt; line-height: 1.6; font-weight: 400;'
+      +   'max-width: 560px; margin: 0 0 16px 0;'
       + '}'
       + '.report-chip {'
-      +   'display: inline-block; padding: 5px 12px; border-radius: 999px;'
-      +   'background: rgba(255,255,255,.12) !important;'
-      +   'color: #ffffff !important;'
-      +   'font-family: \"JetBrains Mono\", monospace; font-size: 7.5pt;'
+      +   'display: inline-block; padding: 4px 13px; border-radius: 999px;'
+      +   'background: rgba(255,255,255,0.09) !important;'
+      +   'color: #e0f2fe !important;'
+      +   'font-family: "JetBrains Mono", monospace; font-size: 7.5pt;'
+      +   'letter-spacing: .18em; text-transform: uppercase;'
+      +   'border: 1px solid rgba(255,255,255,0.20) !important;'
+      +   'margin-right: 7px; margin-bottom: 5px;'
+      + '}'
+      + '.report-chip-soft {'
+      +   'display: inline-block; padding: 4px 13px; border-radius: 999px;'
+      +   'background: rgba(255,255,255,0.07) !important;'
+      +   'color: #bae6fd !important;'
+      +   'font-family: "JetBrains Mono", monospace; font-size: 7.5pt;'
       +   'letter-spacing: .14em; text-transform: uppercase;'
-      +   'border: 1px solid rgba(255,255,255,.25);'
+      +   'border: 1px solid rgba(255,255,255,0.15) !important;'
+      +   'margin-right: 6px; margin-bottom: 5px;'
       + '}'
-      + '.report-cover-brand,'
-      + '.report-cover-brand-card {'
-      +   'background: rgba(255,255,255,0.06) !important;'
-      +   'border-left: 1px solid rgba(255,255,255,0.10) !important;'
-      +   'border-radius: 0 !important;'
-      +   'padding: 34px 30px !important;'
-      +   'color: #f8fafc !important;'
+
+      // Brand strip on cover
+      + '.report-brand-word {'
+      +   'display: block;'
+      +   'color: #ffffff !important; font-size: 26pt; font-weight: 800;'
+      +   'letter-spacing: -0.015em; margin-bottom: 5px;'
       + '}'
-      + '.report-brand-word { color: #ffffff !important; font-size: 26pt; font-weight: 800; letter-spacing: -0.01em; }'
       + '.report-brand-main { color: #ffffff !important; }'
       + '.report-brand-accent { color: #60a5fa !important; }'
-      + '.report-brand-tag { color: #cbd5f5 !important; font-size: 8.5pt; letter-spacing: .12em; text-transform: uppercase; margin-top: 6px; }'
+      + '.report-brand-tag {'
+      +   'display: block;'
+      +   'color: #93c5fd !important; font-family: "JetBrains Mono", monospace;'
+      +   'font-size: 8pt; letter-spacing: .20em; text-transform: uppercase; margin-bottom: 16px;'
+      + '}'
+      + '.report-divider {'
+      +   'height: 1px; background: rgba(255,255,255,0.12) !important;'
+      +   'margin: 16px 0; border: none;'
+      + '}'
 
-      // ---- Section blocks ----
-      // page-break-inside: avoid keeps short sections together, but for long
-      // sections the browser still breaks naturally between rows because of
-      // the tr-level avoid above.
+      // Cover meta grid — compact 2-col project info
+      + '.report-cover-meta {'
+      +   'padding: 7mm 30mm !important;'
+      +   'background: rgba(0,0,0,0.22) !important;'
+      +   'display: grid !important;'
+      +   'grid-template-columns: 1fr 1fr !important;'
+      +   'gap: 0 40px !important;'
+      + '}'
+      + '.report-cover-meta .report-kv { row-gap: 3px !important; }'
+      + '.report-cover-meta .report-kv dt {'
+      +   'color: #7dd3fc !important; font-weight: 500;'
+      +   'font-family: "JetBrains Mono", monospace; font-size: 7.5pt; letter-spacing: .06em;'
+      + '}'
+      + '.report-cover-meta .report-kv dd {'
+      +   'color: #f0f9ff !important; font-weight: 600;'
+      +   'font-family: "JetBrains Mono", monospace; font-size: 8pt;'
+      + '}'
+
+      // Executive summary band — compact to keep cover on 1 page
+      + '.report-exec-band {'
+      +   'padding: 7mm 30mm 9mm 30mm !important;'
+      +   'background: rgba(0,0,0,0.14) !important;'
+      +   'border-top: 1px solid rgba(255,255,255,0.10) !important;'
+      + '}'
+      + '.report-exec-band .report-summary-grid {'
+      +   'display: grid !important;'
+      +   'grid-template-columns: repeat(4, minmax(0,1fr)) !important;'
+      +   'gap: 6px !important;'
+      + '}'
+      + '.report-exec-band .report-summary-card {'
+      +   'background: rgba(255,255,255,0.06) !important;'
+      +   'border: 1px solid rgba(255,255,255,0.11) !important;'
+      +   'border-left: 3px solid #60a5fa !important;'
+      +   'border-radius: 5px !important;'
+      +   'padding: 7px 10px !important;'
+      + '}'
+      + '.report-exec-band .report-summary-card:nth-child(2) { border-left-color: #4ade80 !important; }'
+      + '.report-exec-band .report-summary-card:nth-child(3) { border-left-color: #fb923c !important; }'
+      + '.report-exec-band .report-summary-card:nth-child(4) { border-left-color: #c084fc !important; }'
+      + '.report-exec-band .report-summary-card:nth-child(5) { border-left-color: #22d3ee !important; }'
+      + '.report-exec-band .report-summary-card:nth-child(6) { border-left-color: #f472b6 !important; }'
+      + '.report-exec-band .report-summary-card:nth-child(7) { border-left-color: #fbbf24 !important; }'
+      + '.report-exec-band .report-summary-card:nth-child(8) { border-left-color: #94a3b8 !important; }'
+      + '.report-exec-band .report-summary-label {'
+      +   'color: #93c5fd !important; font-size: 6.5pt !important; margin-bottom: 2px !important;'
+      + '}'
+      + '.report-exec-band .report-summary-value {'
+      +   'color: #ffffff !important; font-size: 11.5pt !important; line-height: 1.2 !important;'
+      + '}'
+      + '.report-exec-band .report-summary-meta {'
+      +   'color: #bfdbfe !important; font-size: 7pt !important; margin-top: 2px !important;'
+      + '}'
+      + '.report-exec-band .report-subtitle {'
+      +   'color: #7dd3fc !important; margin-top: 10px !important; margin-bottom: 5px !important;'
+      +   'border-bottom: 1px solid rgba(255,255,255,0.08) !important;'
+      + '}'
+      // 3-col index on cover to keep it compact
+      + '.report-exec-band .report-index {'
+      +   'display: grid !important;'
+      +   'grid-template-columns: repeat(3, 1fr) !important;'
+      +   'gap: 4px 10px !important; margin-top: 6px !important;'
+      + '}'
+      + '.report-exec-band .report-index-item {'
+      +   'background: rgba(255,255,255,0.05) !important;'
+      +   'border: 1px solid rgba(255,255,255,0.09) !important;'
+      +   'color: #dbeafe !important; font-size: 8pt; padding: 4px 8px !important;'
+      + '}'
+      + '.report-exec-band .report-index-num {'
+      +   'background: rgba(96,165,250,0.25) !important;'
+      +   'color: #bfdbfe !important; padding: 1px 6px !important; font-size: 7pt !important;'
+      + '}'
+
+      // Override any inline grid-template-columns inside the cover
+      + '.report-cover-shell div[style*="grid-template-columns"] {'
+      +   'grid-template-columns: 1fr 1fr !important;'
+      +   'gap: 12px 36px !important;'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // SECTION BLOCKS (body pages)
+      // ═══════════════════════════════════════════════════════════
       + '.report-block {'
       +   'background: #ffffff !important;'
       +   'box-shadow: none !important;'
       +   'border: none !important;'
       +   'border-radius: 0 !important;'
-      +   'padding: 6px 0 !important;'
-      +   'margin: 0 0 14px 0 !important;'
+      +   'padding: 0 !important;'
+      +   'margin: 0 0 26px 0 !important;'
       +   'page-break-inside: auto !important;'
+      +   'break-inside: auto !important;'
       + '}'
-      + '.report-block.report-page-break { page-break-before: always; }'
+      + '.report-block.report-page-break {'
+      +   'page-break-before: auto !important;'
+      +   'break-before: auto !important;'
+      + '}'
       + '.report-section-head {'
-      +   'display: flex; align-items: flex-end; gap: 16px;'
+      +   'display: flex !important;'
+      +   'align-items: flex-end !important;'
+      +   'gap: 12px !important;'
       +   'border-bottom: 2px solid #0f172a !important;'
-      +   'padding: 0 0 10px 0; margin: 0 0 14px 0;'
+      +   'padding: 0 0 9px 0 !important; margin: 0 0 18px 0 !important;'
+      +   'page-break-after: avoid !important;'
+      +   'break-after: avoid !important;'
       + '}'
       + '.report-section-label {'
-      +   'display: inline-block; font-family: \"JetBrains Mono\", \"Consolas\", monospace;'
-      +   'font-size: 8.5pt !important; letter-spacing: .22em !important; text-transform: uppercase !important;'
-      +   'color: #ffffff !important; background: #0f172a !important;'
-      +   'padding: 4px 10px; border-radius: 3px; line-height: 1;'
+      +   'display: inline-block; flex-shrink: 0;'
+      +   'font-family: "JetBrains Mono", monospace;'
+      +   'font-size: 7.5pt !important; letter-spacing: .22em !important; text-transform: uppercase !important;'
+      +   'color: #ffffff !important; background: #1e40af !important;'
+      +   'padding: 4px 10px; border-radius: 3px; line-height: 1.4;'
       + '}'
       + '.report-block h4 {'
-      +   'font-size: 15.5pt !important; font-weight: 700 !important; color: #0f172a !important;'
-      +   'margin: 8px 0 0 0 !important; letter-spacing: -0.01em;'
+      +   'display: block !important;'
+      +   'font-size: 14pt !important; font-weight: 700 !important; color: #0f172a !important;'
+      +   'margin: 0 !important; letter-spacing: -0.015em !important;'
       +   'background: transparent !important; padding: 0 !important;'
+      +   'page-break-after: avoid !important;'
       + '}'
-      + '.report-section-body { color: #1f2937 !important; font-size: 10.5pt; }'
+      + '.report-section-body { color: #1e293b !important; font-size: 9.5pt !important; }'
 
-      // ---- Summary grid / KPI tiles ----
+      // ═══════════════════════════════════════════════════════════
+      // TWO-COLUMN LAYOUT
+      // ═══════════════════════════════════════════════════════════
+      + '.report-grid-2 {'
+      +   'display: grid !important;'
+      +   'grid-template-columns: 1fr 1fr !important;'
+      +   'gap: 16px 28px !important;'
+      +   'margin-bottom: 14px !important;'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // KPI SUMMARY TILES
+      // ═══════════════════════════════════════════════════════════
       + '.report-summary-grid {'
       +   'display: grid !important;'
-      +   'grid-template-columns: repeat(4, minmax(0, 1fr)) !important;'
-      +   'gap: 8px !important;'
-      +   'margin-top: 10px !important;'
+      +   'grid-template-columns: repeat(4, minmax(0,1fr)) !important;'
+      +   'gap: 9px !important;'
+      +   'margin-top: 12px !important;'
       + '}'
       + '.report-summary-card {'
       +   'background: #f8fafc !important;'
       +   'border: 1px solid #e2e8f0 !important;'
       +   'border-left: 4px solid #1d4ed8 !important;'
       +   'border-radius: 6px !important;'
-      +   'padding: 10px 12px !important;'
+      +   'padding: 11px 13px !important;'
       +   'box-shadow: none !important;'
       + '}'
       + '.report-summary-card:nth-child(2) { border-left-color: #16a34a !important; }'
@@ -8792,126 +9105,367 @@
       + '.report-summary-card:nth-child(7) { border-left-color: #ca8a04 !important; }'
       + '.report-summary-card:nth-child(8) { border-left-color: #475569 !important; }'
       + '.report-summary-label {'
-      +   'font-family: \"JetBrains Mono\", monospace !important;'
-      +   'font-size: 7.5pt !important; letter-spacing: .12em; text-transform: uppercase;'
-      +   'color: #475569 !important; margin: 0 0 4px 0 !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      +   'font-size: 7pt !important; letter-spacing: .14em; text-transform: uppercase;'
+      +   'color: #64748b !important; margin: 0 0 4px 0 !important;'
       + '}'
       + '.report-summary-value {'
-      +   'font-size: 16pt !important; font-weight: 700 !important;'
-      +   'color: #0f172a !important; letter-spacing: -0.01em;'
-      +   'margin: 0 !important; line-height: 1.15 !important;'
+      +   'font-size: 14pt !important; font-weight: 700 !important;'
+      +   'color: #0f172a !important; letter-spacing: -0.015em;'
+      +   'margin: 0 !important; line-height: 1.2 !important;'
       + '}'
       + '.report-summary-meta {'
-      +   'font-family: \"JetBrains Mono\", monospace !important;'
-      +   'font-size: 8.5pt !important; color: #64748b !important;'
-      +   'margin-top: 3px !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      +   'font-size: 8pt !important; color: #64748b !important;'
+      +   'margin-top: 3px !important; line-height: 1.4 !important;'
       + '}'
 
-      // ---- Tables ----
-      + '#report-content table {'
+      // ═══════════════════════════════════════════════════════════
+      // TABLES (all tables inside the report)
+      // ═══════════════════════════════════════════════════════════
+      + '.table-wrap { overflow: visible !important; width: 100% !important; margin: 8px 0 !important; }'
+      + '#report-content table, .table-wrap table, .calc-table {'
       +   'border-collapse: collapse !important; width: 100% !important;'
-      +   'font-size: 9pt !important; margin: 6px 0 !important;'
+      +   'font-size: 8.5pt !important; margin: 6px 0 !important;'
       +   'background: #ffffff !important;'
       +   'table-layout: auto !important;'
       +   'page-break-inside: auto !important;'
       + '}'
-      + '#report-content tr { page-break-inside: avoid !important; }'
-      + '#report-content th {'
-      +   'background: #0f172a !important; color: #ffffff !important;'
-      +   'text-align: left; padding: 6px 8px !important;'
-      +   'font-weight: 600 !important; font-size: 8.5pt !important;'
-      +   'letter-spacing: .04em; text-transform: uppercase;'
-      +   'border-bottom: none !important;'
+      + '#report-content tr, .table-wrap tr { page-break-inside: avoid !important; }'
+      + '#report-content th, .table-wrap th, .calc-table th {'
+      +   'background: #0f172a !important; color: #f1f5f9 !important;'
+      +   'text-align: left; padding: 7px 9px !important;'
+      +   'font-weight: 600 !important; font-size: 7.5pt !important;'
+      +   'letter-spacing: .06em; text-transform: uppercase;'
+      +   'border: none !important;'
+      +   'white-space: nowrap;'
       + '}'
-      + '#report-content td {'
-      +   'padding: 5px 8px !important;'
-      +   'border-bottom: 1px solid #e2e8f0 !important;'
+      + '#report-content td, .table-wrap td, .calc-table td {'
+      +   'padding: 5px 9px !important;'
+      +   'border-bottom: 1px solid #f1f5f9 !important;'
       +   'vertical-align: top;'
       +   'word-break: break-word;'
+      +   'color: #1e293b !important;'
       + '}'
-      + '#report-content td.num { text-align: right; font-family: \"JetBrains Mono\", monospace; }'
-      + '#report-content tbody tr:nth-child(even) td { background: #f8fafc !important; }'
-      + '#report-content tbody tr:last-child td { border-bottom: 1px solid #cbd5e1 !important; }'
+      + '#report-content td.num, .calc-table td.num {'
+      +   'text-align: right !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      +   'font-size: 8pt !important;'
+      + '}'
+      + '#report-content tbody tr:nth-child(even) td,'
+      + '.table-wrap tbody tr:nth-child(even) td { background: #f8fafc !important; }'
+      + '.total-row td, tr.total-row td {'
+      +   'background: #f0f4ff !important;'
+      +   'font-weight: 700 !important;'
+      +   'border-top: 1.5px solid #c7d7f5 !important;'
+      +   'border-bottom: 1.5px solid #c7d7f5 !important;'
+      + '}'
 
-      // ---- KV definition lists ----
+      // ═══════════════════════════════════════════════════════════
+      // ESP COMPONENT ROWS
+      // ═══════════════════════════════════════════════════════════
+      + '.esp-row {'
+      +   'display: grid !important;'
+      +   'grid-template-columns: 2fr 1fr 1fr 1fr 2fr !important;'
+      +   'border-bottom: 1px solid #f1f5f9 !important;'
+      +   'background: #ffffff !important;'
+      + '}'
+      + '.esp-row:nth-child(even) { background: #f8fafc !important; }'
+      + '.esp-cell {'
+      +   'padding: 5px 8px !important;'
+      +   'font-size: 8pt !important;'
+      +   'color: #1e293b !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      + '}'
+      + '.esp-total-row {'
+      +   'background: #f0f4ff !important;'
+      +   'border-top: 2px solid #1e40af !important;'
+      +   'border-bottom: 2px solid #1e40af !important;'
+      +   'font-weight: 700 !important;'
+      + '}'
+      + '.esp-total-row .esp-cell { color: #1e40af !important; font-size: 8.5pt !important; }'
+
+      // ═══════════════════════════════════════════════════════════
+      // RESULTS GRID (from firstResultsGridMarkup)
+      // ═══════════════════════════════════════════════════════════
+      + '.results-grid {'
+      +   'display: grid !important;'
+      +   'grid-template-columns: repeat(4, minmax(0, 1fr)) !important;'
+      +   'gap: 8px !important; margin: 10px 0 !important;'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // KV DEFINITION LISTS
+      // ═══════════════════════════════════════════════════════════
       + '.report-kv {'
-      +   'display: grid; grid-template-columns: max-content 1fr; column-gap: 12px; row-gap: 4px;'
-      +   'font-size: 10pt;'
+      +   'display: grid !important;'
+      +   'grid-template-columns: max-content 1fr !important;'
+      +   'column-gap: 16px !important; row-gap: 5px !important;'
+      +   'font-size: 9pt;'
+      +   'margin-bottom: 10px;'
       + '}'
-      + '.report-kv dt { color: #64748b !important; font-weight: 500; letter-spacing: .02em; }'
-      + '.report-kv dd { color: #0f172a !important; font-weight: 600; margin: 0; font-family: \"JetBrains Mono\", monospace; }'
+      + '.report-kv dt { color: #64748b !important; font-weight: 500; white-space: nowrap; }'
+      + '.report-kv dd { color: #0f172a !important; font-weight: 600; margin: 0; font-family: "JetBrains Mono", monospace; }'
 
-      // ---- Index ----
+      // ═══════════════════════════════════════════════════════════
+      // TABLE OF CONTENTS / INDEX
+      // ═══════════════════════════════════════════════════════════
       + '.report-index {'
-      +   'display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 18px;'
-      +   'margin-top: 10px;'
+      +   'display: grid !important;'
+      +   'grid-template-columns: repeat(3, 1fr) !important;'
+      +   'gap: 5px 14px !important;'
+      +   'margin-top: 12px !important;'
       + '}'
       + '.report-index-item {'
-      +   'display: flex; align-items: center; gap: 10px;'
-      +   'padding: 6px 10px;'
+      +   'display: flex !important; align-items: center; gap: 9px;'
+      +   'padding: 6px 10px !important;'
       +   'background: #f8fafc !important; border: 1px solid #e2e8f0 !important;'
-      +   'border-radius: 4px;'
-      +   'font-size: 9.5pt; color: #0f172a !important;'
+      +   'border-radius: 5px;'
+      +   'font-size: 9pt; color: #1e293b !important;'
       + '}'
       + '.report-index-num {'
-      +   'font-family: \"JetBrains Mono\", monospace !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
       +   'background: #1e40af !important; color: #fff !important;'
       +   'padding: 2px 8px; border-radius: 3px;'
-      +   'font-size: 8pt; letter-spacing: .08em;'
+      +   'font-size: 7.5pt; letter-spacing: .06em; flex-shrink: 0;'
       + '}'
 
-      // ---- Pills, notes, AI cards ----
+      // ═══════════════════════════════════════════════════════════
+      // CHIPS / PILLS / STATUS BADGES
+      // ═══════════════════════════════════════════════════════════
       + '.report-status-pill {'
-      +   'display: inline-block; padding: 3px 10px; border-radius: 999px;'
-      +   'background: #dcfce7 !important; color: #166534 !important;'
-      +   'font-family: \"JetBrains Mono\", monospace !important;'
-      +   'font-size: 8.5pt; letter-spacing: .08em;'
+      +   'display: inline-block; padding: 2px 10px; border-radius: 999px;'
+      +   'background: #dcfce7 !important; color: #14532d !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      +   'font-size: 8pt; letter-spacing: .08em; font-weight: 600;'
       + '}'
+      + '.admin-chip {'
+      +   'display: inline-block; padding: 2px 8px; border-radius: 3px;'
+      +   'background: #1e40af !important; color: #fff !important;'
+      +   'font-family: "JetBrains Mono", monospace; font-size: 7pt;'
+      +   'letter-spacing: .12em; text-transform: uppercase; vertical-align: middle; margin-left: 4px;'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // CALLOUT NOTES & AI CARDS
+      // ═══════════════════════════════════════════════════════════
       + '.report-inline-note {'
-      +   'background: #fef9c3 !important; border-left: 3px solid #ca8a04 !important;'
-      +   'padding: 8px 12px; border-radius: 0 4px 4px 0;'
-      +   'font-size: 9.5pt; color: #713f12 !important;'
+      +   'background: #fffbeb !important;'
+      +   'border-left: 3px solid #f59e0b !important;'
+      +   'padding: 9px 14px; border-radius: 0 5px 5px 0;'
+      +   'font-size: 9pt; color: #78350f !important;'
       +   'margin: 10px 0;'
       + '}'
       + '.report-ai-card {'
       +   'background: #eff6ff !important; border: 1px solid #bfdbfe !important;'
-      +   'border-radius: 8px; padding: 12px 14px; margin: 8px 0;'
+      +   'border-left: 4px solid #3b82f6 !important;'
+      +   'border-radius: 6px; padding: 13px 16px; margin: 9px 0;'
       + '}'
-      + '.report-ai-card-title { color: #1e3a8a !important; font-weight: 700; font-size: 11pt; }'
-      + '.report-ai-card-body { color: #1f2937 !important; font-size: 10pt; line-height: 1.55; }'
+      + '.report-ai-card-title { color: #1e3a8a !important; font-weight: 700; font-size: 10.5pt; margin-bottom: 6px !important; display: block !important; }'
+      + '.report-ai-card-body { color: #1e293b !important; font-size: 9.5pt; line-height: 1.6; }'
 
-      // ---- Subtitles ----
+      // ═══════════════════════════════════════════════════════════
+      // TYPOGRAPHY — SUBTITLES, LABELS
+      // ═══════════════════════════════════════════════════════════
       + '.report-subtitle {'
-      +   'font-family: \"JetBrains Mono\", monospace !important;'
-      +   'font-size: 8.5pt !important; letter-spacing: .18em !important;'
-      +   'text-transform: uppercase !important; color: #475569 !important;'
-      +   'margin: 12px 0 6px 0 !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      +   'font-size: 8pt !important; letter-spacing: .20em !important;'
+      +   'text-transform: uppercase !important; color: #94a3b8 !important;'
+      +   'margin: 16px 0 7px 0 !important;'
+      +   'border-bottom: 1px solid #f1f5f9 !important;'
+      +   'padding-bottom: 5px !important;'
+      +   'page-break-after: avoid !important;'
       + '}'
 
-      // ---- Disclaimer / footer ----
+      // ═══════════════════════════════════════════════════════════
+      // VISUALIZATION CONTAINERS
+      // ═══════════════════════════════════════════════════════════
+      + '.report-visual {'
+      +   'width: 100% !important; overflow: hidden;'
+      +   'border: 1px solid #e2e8f0 !important;'
+      +   'border-radius: 6px !important;'
+      +   'margin: 10px 0 !important;'
+      +   'background: #f8fafc !important;'
+      + '}'
+      + '.report-visual img, .report-visual svg {'
+      +   'display: block; width: 100%; height: auto;'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // DISCLAIMER & FOOTER
+      // ═══════════════════════════════════════════════════════════
       + '.report-disclaimer {'
-      +   'margin: 18px 0; padding: 12px 14px;'
+      +   'margin: 20px 0 8px 0; padding: 13px 16px;'
       +   'background: #f1f5f9 !important; border-left: 4px solid #475569 !important;'
-      +   'border-radius: 0 4px 4px 0; font-size: 9pt; color: #334155 !important;'
+      +   'border-radius: 0 5px 5px 0; font-size: 9pt; color: #334155 !important;'
+      +   'line-height: 1.6;'
       + '}'
       + '.report-footer {'
-      +   'margin-top: 22px; padding-top: 10px;'
-      +   'border-top: 1px solid #cbd5e1 !important;'
-      +   'font-family: \"JetBrains Mono\", monospace !important;'
-      +   'font-size: 8.5pt; color: #64748b !important; text-align: center;'
+      +   'margin-top: 20px; padding-top: 12px;'
+      +   'border-top: 1.5px solid #e2e8f0 !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      +   'font-size: 8pt; color: #94a3b8 !important;'
+      +   'text-align: center; letter-spacing: .06em;'
       + '}'
 
-      // ---- Hide screen-only controls ----
-      + 'button, .btn, .nav, .top-bar, .left-rail, .panel-tabs { display: none !important; }';
+      // ═══════════════════════════════════════════════════════════
+      // VALIDATION STATUS COLORS (use hex, not var())
+      // ═══════════════════════════════════════════════════════════
+      + '.validation-status-ok   { color: #15803d !important; }'
+      + '.validation-status-warn { color: #b45309 !important; }'
+      + '.validation-status-fail { color: #b91c1c !important; }'
+
+      // ═══════════════════════════════════════════════════════════
+      // SECTION 9 — DIFFUSER: coordinate chips + note boxes
+      // ═══════════════════════════════════════════════════════════
+      + '.diffuser-coord-label {'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      +   'font-size: 7.5pt !important; letter-spacing: .12em !important;'
+      +   'text-transform: uppercase !important; font-weight: 700 !important;'
+      + '}'
+      + '.diffuser-coord-chips {'
+      +   'display: flex !important; flex-wrap: wrap !important;'
+      +   'gap: 4px !important; overflow: visible !important;'
+      +   'max-height: none !important;'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // SECTION 10 — PSYCHROMETRIC: outdoor/indoor state card grid
+      // ═══════════════════════════════════════════════════════════
+      + '#psychro-outdoor, #psychro-indoor {'
+      +   'display: grid !important;'
+      +   'grid-template-columns: repeat(4, minmax(0,1fr)) !important;'
+      +   'gap: 7px 12px !important;'
+      +   'margin: 8px 0 16px 0 !important;'
+      +   'padding: 0 !important;'
+      + '}'
+      + '.psychro-val {'
+      +   'background: #f8fafc !important;'
+      +   'border: 1px solid #e2e8f0 !important;'
+      +   'border-left: 3px solid #1e40af !important;'
+      +   'border-radius: 5px !important;'
+      +   'padding: 8px 10px !important;'
+      +   'page-break-inside: avoid !important; break-inside: avoid !important;'
+      + '}'
+      + '.psychro-label {'
+      +   'display: block !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      +   'font-size: 6.5pt !important; letter-spacing: .12em !important;'
+      +   'text-transform: uppercase !important; color: #64748b !important;'
+      +   'margin-bottom: 3px !important;'
+      + '}'
+      + '.psychro-num {'
+      +   'display: block !important;'
+      +   'font-size: 11pt !important; font-weight: 700 !important;'
+      +   'color: #0f172a !important; line-height: 1.2 !important;'
+      + '}'
+      + '.psychro-unit {'
+      +   'font-size: 7.5pt !important; font-weight: 400 !important;'
+      +   'color: #64748b !important;'
+      +   'font-family: "JetBrains Mono", monospace !important;'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // SECTION 13 — MULTI-ROOM: full-width stacked tables, no wrapping
+      // ═══════════════════════════════════════════════════════════
+      + '.s13-wrap table { font-size: 7.5pt !important; }'
+      + '.s13-wrap th {'
+      +   'white-space: nowrap !important;'
+      +   'font-size: 7pt !important;'
+      +   'padding: 5px 6px !important;'
+      +   'letter-spacing: 0 !important;'
+      + '}'
+      + '.s13-wrap td { padding: 4px 6px !important; word-break: normal !important; }'
+      + '.s13-wrap td.num { white-space: nowrap !important; font-size: 7pt !important; }'
+
+      // ═══════════════════════════════════════════════════════════
+      // SECTION 16 — AI DESIGN STUDIO: compact metric cards + small scenario table
+      // ═══════════════════════════════════════════════════════════
+      + '.report-ai-metric-grid {'
+      +   'display: grid !important;'
+      +   'grid-template-columns: repeat(5, minmax(0,1fr)) !important;'
+      +   'gap: 6px !important;'
+      +   'margin: 8px 0 12px 0 !important;'
+      + '}'
+      + '.report-ai-metric-grid .report-summary-card { padding: 7px 9px !important; }'
+      + '.report-ai-metric-grid .report-summary-value { font-size: 9.5pt !important; letter-spacing: -0.01em !important; }'
+      + '.report-ai-metric-grid .report-summary-label { font-size: 6pt !important; letter-spacing: .08em !important; }'
+      + '.report-ai-metric-grid .report-summary-meta { font-size: 7pt !important; margin-top: 2px !important; }'
+      + '.report-ai-card-grid {'
+      +   'display: grid !important;'
+      +   'grid-template-columns: repeat(2, minmax(0,1fr)) !important;'
+      +   'gap: 10px !important;'
+      +   'margin: 8px 0 !important;'
+      + '}'
+      + '.s16-scenario-wrap table { font-size: 7pt !important; table-layout: auto !important; }'
+      + '.s16-scenario-wrap th {'
+      +   'white-space: nowrap !important;'
+      +   'font-size: 6.5pt !important;'
+      +   'padding: 5px 5px !important;'
+      +   'letter-spacing: 0 !important;'
+      + '}'
+      + '.s16-scenario-wrap td { padding: 3px 5px !important; word-break: normal !important; font-size: 7pt !important; }'
+      + '.s16-scenario-wrap td.num { white-space: nowrap !important; font-size: 6.5pt !important; }'
+      // Hide verbose columns in print — AIRFLOW SPLIT, RETURN LOOP, PAYBACK, ENERGY Δ, FAN Δ
+      // (all data is already shown in the scenario cards above)
+      + '.s16-scenario-wrap .scen-hide { display: none !important; }'
+      // Scenario name: allow wrapping but constrain width
+      + '.s16-scenario-wrap td.scen-name {'
+      +   'font-weight: 600 !important;'
+      +   'font-size: 7pt !important;'
+      +   'max-width: 38mm !important;'
+      +   'word-break: break-word !important;'
+      +   'white-space: normal !important;'
+      + '}'
+      // System type: allow wrapping
+      + '.s16-scenario-wrap td.scen-sys {'
+      +   'font-size: 7pt !important;'
+      +   'max-width: 30mm !important;'
+      +   'word-break: break-word !important;'
+      +   'white-space: normal !important;'
+      + '}'
+
+      // ═══════════════════════════════════════════════════════════
+      // SECTION 17 — 3D SCHEMATIC: full-width stacked tables, no wrapping
+      // ═══════════════════════════════════════════════════════════
+      + '.s17-wrap table { font-size: 7.5pt !important; }'
+      + '.s17-wrap th {'
+      +   'white-space: nowrap !important;'
+      +   'font-size: 7pt !important;'
+      +   'padding: 5px 6px !important;'
+      +   'letter-spacing: 0 !important;'
+      + '}'
+      + '.s17-wrap td { padding: 4px 6px !important; word-break: normal !important; }'
+      + '.s17-wrap td.num { white-space: nowrap !important; }'
+      // Notes column (4th td) in schematic basis table — allow it to wrap
+      + '.s17-wrap td:nth-child(4) { word-break: break-word !important; color: #475569 !important; font-size: 7pt !important; }'
+
+      // ═══════════════════════════════════════════════════════════
+      // SCREEN-ONLY ELEMENTS — HIDE IN PRINT
+      // ═══════════════════════════════════════════════════════════
+      + 'button, .btn, .nav, .top-bar, .left-rail, .panel-tabs,'
+      + '.room-list-item, .room-list-delete, input, select, textarea,'
+      + '[data-screen-only], .screen-only { display: none !important; }';
+
+    // Embed minimal Google Fonts subset for Inter + JetBrains Mono so the
+    // print rendering matches design intent regardless of installed system
+    // fonts. The fonts load synchronously enough for the print dialog
+    // because we delay the actual print() call below.
+    const fontsLink = '<link rel="preconnect" href="https://fonts.googleapis.com">'
+      + '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+      + '<link href="https://fonts.googleapis.com/css2?'
+      +   'family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,600'
+      +   '&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400'
+      +   '&display=swap" rel="stylesheet">';
 
     return '<!doctype html><html><head><meta charset="utf-8">'
       + '<title>HVAC Design Report — Musk-IT</title>'
-      + styleMarkup
+      + fontsLink
       + '<style>' + pdfStyle + '</style>'
       + '</head><body>'
-      + '<main class="main"><section class="panel active" id="p-report"><div id="report-content">'
+      + '<div id="report-content">'
       + reportHtml
-      + '</div></section></main>'
+      + '</div>'
       + '</body></html>';
   }
 

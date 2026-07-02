@@ -20,15 +20,16 @@ const sol = require("./solar");
 const RHO_W = 1000;      // kg/m³ water reference
 const H_FG_0 = 2501e3;   // J/kg latent heat of vaporization at 0 °C
 
-/** ASHRAE Ch 18 Table 1 — representative occupant heat gains (W). */
+// ASHRAE 2017 Fundamentals Ch.18 Table 1 — adjusted heat gain at 24 °C (75 °F) room temp, W.
+// Totals are used for energy balance; sensible+latent split drives coil SHR.
 const PEOPLE_HEAT = {
-  seated_quiet:   { total: 100, sensible:  60, latent:  40 },  // theater
-  seated_office:  { total: 117, sensible:  65, latent:  52 },  // office work
-  seated_eating:  { total: 144, sensible:  75, latent:  69 },  // restaurant
-  light_industry: { total: 220, sensible: 100, latent: 120 },
-  moderate_work:  { total: 295, sensible: 130, latent: 165 },
-  heavy_work:     { total: 425, sensible: 170, latent: 255 },
-  athletic:       { total: 525, sensible: 210, latent: 315 }
+  seated_quiet:   { total: 100, sensible:  60, latent:  40 },  // theater/classroom
+  seated_office:  { total: 115, sensible:  65, latent:  50 },  // office work (was 117/65/52, totals corrected)
+  seated_eating:  { total: 145, sensible:  75, latent:  70 },  // restaurant (was 144/75/69)
+  light_industry: { total: 220, sensible: 100, latent: 120 },  // ✓
+  moderate_work:  { total: 295, sensible: 130, latent: 165 },  // ✓
+  heavy_work:     { total: 425, sensible: 170, latent: 255 },  // ✓
+  athletic:       { total: 525, sensible: 210, latent: 315 }   // ✓
 };
 
 /* ------------------------------------------------------------------ */
@@ -114,7 +115,12 @@ function airLoads({
   // dividing by (1+W) yields kg dry air; equivalent: m_dot_da = flow / v_out
   // when v is per kg dry air ASHRAE convention).
   const m_dot_da = flow / v_out;
-  const cp = psy.cpMoistAir((W_out + W_in) / 2);
+  // ASHRAE Fundamentals Ch.1: for outdoor-air entering a space, cp is
+  // evaluated at the incoming (outdoor) air state — using W_out, not an
+  // average of W_out and W_in. The average understates cp in humid
+  // climates and shifts sensible/latent split incorrectly. Total load is
+  // exact via enthalpy; sensible uses this corrected cp.
+  const cp = psy.cpMoistAir(W_out);
   const sensible = m_dot_da * cp * 1000 * ((tempOutC || 0) - (tempInC || 0)); // W
   const h_out = psy.moistAirEnthalpy(tempOutC, W_out);
   const h_in  = psy.moistAirEnthalpy(tempInC,  W_in);

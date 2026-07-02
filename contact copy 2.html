@@ -543,10 +543,29 @@
     font-size: 10px;
     letter-spacing: 0.05em;
   }
+  .schematic-chip-code {
+    min-width: 30px;
+    height: 20px;
+    padding: 0 6px;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 5px;
+    border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(8,13,22,0.84);
+    color: #e5edf8;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    line-height: 1;
+  }
   .schematic-chip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .schematic-chip.blue .schematic-chip-dot { background: #5bb5ff; box-shadow: 0 0 14px rgba(91,181,255,0.65); }
   .schematic-chip.red .schematic-chip-dot { background: #ff8f7b; box-shadow: 0 0 14px rgba(255,143,123,0.50); }
   .schematic-chip.gray .schematic-chip-dot { background: #9aa6c5; }
+  .schematic-chip.blue .schematic-chip-code { color: #63b8ff; border-color: rgba(99,184,255,0.50); }
+  .schematic-chip.red .schematic-chip-code { color: #ff9b84; border-color: rgba(255,155,132,0.48); }
+  .schematic-chip.gray .schematic-chip-code { color: #d7dee9; border-color: rgba(215,222,233,0.42); }
+  .schematic-chip.cyan .schematic-chip-code { color: #8de4ff; border-color: rgba(141,228,255,0.48); }
+  .schematic-chip.amber .schematic-chip-code { color: #ffbd6a; border-color: rgba(255,189,106,0.48); }
   .schematic-overlay-note {
     padding: 10px 12px;
     border-radius: var(--r);
@@ -1503,8 +1522,8 @@
         <div class="field"><label>AHU GROUP</label><input type="text" id="ahu_group" value="AHU-1"><span class="hint">Optional project grouping tag</span></div>
       </div>
       <div class="fg" style="margin-top:14px;">
-        <div class="field"><label>GLASS SHADING COEFFICIENT</label><input type="number" id="sc_glass" value="0.87" step="0.01"><span class="hint">Clear glazing default</span></div>
-        <div class="field"><label>WINDOW CLF</label><input type="number" id="clf_shade" value="0.55" step="0.01"><span class="hint">Internal shade / office profile</span></div>
+        <div class="field"><label>GLASS SHGC</label><input type="number" id="sc_glass" value="0.87" step="0.01" min="0.1" max="1.0"><span class="hint">Solar Heat Gain Coeff. Clear glass=0.87 · SHGC=0.87×SC</span></div>
+        <div class="field"><label>WINDOW CLF</label><input type="number" id="clf_shade" value="0.55" step="0.01" min="0.1" max="1.0"><span class="hint">Internal shade / office profile</span></div>
         <div class="field"><label>U-VALUE ROOF (W/m²K)</label><input type="number" id="u_roof" value="0.40" step="0.01"><span class="hint">Used in roof conduction load</span></div>
       </div>
     </div>
@@ -1599,7 +1618,9 @@
       </div>
       <div class="fg" style="margin-top:14px;">
         <div class="field"><label>LIGHTING LOAD (W/m²)</label><input type="number" id="lighting" value="12" step="0.5"><span class="hint">ECBC office: 10–15 W/m²</span></div>
+        <div class="field"><label>LIGHTING CLF</label><input type="number" id="clf_lighting" value="0.90" step="0.01" min="0.4" max="1.0"><span class="hint">ASHRAE Table 18.2 · 10h operation=0.90</span></div>
         <div class="field"><label>EQUIPMENT LOAD (W/m²)</label><input type="number" id="equip" value="15" step="0.5"><span class="hint">Computers, monitors etc.</span></div>
+        <div class="field"><label>EQUIPMENT DIVERSITY</label><input type="number" id="div_equip" value="0.80" step="0.01" min="0.3" max="1.0"><span class="hint">Not all equipment runs simultaneously · 0.8 typical</span></div>
         <div class="field"><label>ROOF / FLOOR EXPOSED</label>
           <select id="roof_exp">
             <option value="top_floor" selected>Top floor (roof exposed)</option>
@@ -2390,7 +2411,7 @@
   </div>
 
   <div class="panel" id="p-schematic3d">
-    <div class="section-note">Interactive 3D schematic driven by the active room result. Room size, AHU count, zoning, and duct sizes follow the live calculation output, but routing, air animation, and equipment geometry are visual only and must not be treated as a fabrication drawing, standard-compliant layout, or issued design model.</div>
+    <div class="section-note">Interactive Revit-style 3D coordination view driven by the active room result. Room size, AHU count, zoning, diffuser count, and duct sections follow the live calculation output, with matching symbols for walls, windows, AHUs, diffusers, and supply / return duct classes.</div>
 
     <div class="results-grid">
       <div class="metric c-blue"><div class="metric-label">ROOM ENVELOPE</div><div class="metric-value" id="m-schematic-room">—</div></div>
@@ -2402,12 +2423,17 @@
     <div class="schematic-shell">
       <div class="schematic-topbar">
         <div class="schematic-legend" id="schematic3d-legend">
-          <span class="schematic-chip blue"><span class="schematic-chip-dot"></span>Supply air path</span>
-          <span class="schematic-chip red"><span class="schematic-chip-dot"></span>Return / warm air path</span>
-          <span class="schematic-chip gray"><span class="schematic-chip-dot"></span>Room / equipment geometry</span>
+          <span class="schematic-chip gray"><span class="schematic-chip-code">W</span>Walls</span>
+          <span class="schematic-chip cyan"><span class="schematic-chip-code">WIN</span>Windows</span>
+          <span class="schematic-chip gray"><span class="schematic-chip-code">AHU</span>Air handling units</span>
+          <span class="schematic-chip blue"><span class="schematic-chip-code">SD</span>Supply diffusers</span>
+          <span class="schematic-chip blue"><span class="schematic-chip-code">SA-M</span>Main supply ducts</span>
+          <span class="schematic-chip blue"><span class="schematic-chip-code">SA-B</span>Branch supply ducts</span>
+          <span class="schematic-chip red"><span class="schematic-chip-code">RA-M</span>Main return ducts</span>
+          <span class="schematic-chip red"><span class="schematic-chip-code">RA-B</span>Branch return ducts</span>
         </div>
         <div class="schematic-disclaimer" id="schematic3d-disclaimer">
-          Visualization only. Use this for coordination and presentation, not for IFC, shop, fabrication, or standards approval.
+          Visualization only. The model uses calculated dimensions and symbol categories for coordination and presentation; it is not an IFC export, shop drawing, or standards approval model.
         </div>
       </div>
 
@@ -2415,7 +2441,7 @@
         <canvas id="schematic3d-canvas" class="schematic-canvas" width="1400" height="760" aria-label="3D HVAC schematic visualization"></canvas>
         <div class="schematic-overlay">
           <div class="schematic-overlay-note" id="schematic3d-note">
-            Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset to ISO. Use Outside View for an uncluttered duct overview and Inside View to turn the ceiling on and look into the room. Air animation is illustrative only.
+            Drag to rotate. Use wheel or trackpad scroll to zoom. Double-click to reset to ISO. Outside View uses a Revit-style cutaway shell; Inside View keeps the same symbols while looking from inside the room.
           </div>
         </div>
         <div class="schematic-stage-controls">
@@ -2859,11 +2885,12 @@ const ASHRAE_CITIES = [
 
 // ── LOOKUP TABLES ──
 
+// ASHRAE 2017 Fundamentals Ch.18 Table 1 at 24°C room temperature (W/person)
 const OCCUPANT_LOADS = {
-  seated_rest:    { sensible: 60,  latent: 45  },
-  seated_light:   { sensible: 70,  latent: 45  },
-  standing_light: { sensible: 75,  latent: 55  },
-  walking:        { sensible: 90,  latent: 75  },
+  seated_rest:    { sensible: 60,  latent: 40  },  // theater/classroom — was L=45
+  seated_light:   { sensible: 65,  latent: 50  },  // office/hotel — was 70S/45L
+  standing_light: { sensible: 75,  latent: 55  },  // retail ✓
+  walking:        { sensible: 90,  latent: 75  },  // walking ✓
 };
 
 // Solar Heat Gain Factor (W/m²) by orientation — approx. ASHRAE values for 28°N lat, summer
@@ -3121,17 +3148,19 @@ function runAll() {
   const people_S = occ * pload.sensible;
   const people_L = occ * pload.latent;
 
-  // 2. Lighting load (sensible only; CLF = 0.9 for fluorescent/LED in operation)
-  const light_S = area * lighting * 0.9;
+  // 2. Lighting load (sensible only; CLF from ASHRAE Table 18.2)
+  const clf_lighting = Math.min(Math.max(G('clf_lighting') || 0.90, 0.4), 1.0);
+  const light_S = area * lighting * clf_lighting;
 
-  // 3. Equipment load (sensible; diversified 0.8)
-  const equip_S = area * equip * 0.8;
+  // 3. Equipment load (sensible; diversity from user input)
+  const div_equip = Math.min(Math.max(G('div_equip') || 0.80, 0.1), 1.0);
+  const equip_S = area * equip * div_equip;
 
-  // 4. Window solar heat gain: Q = A × SHGF × SC × CLF
+  // 4. Window solar heat gain: Q = A × SHGF × SHGC × CLF
   const shgf_val = SHGF[win_orient];
-  const sc = 0.87; // clear glass
-  const clf = 0.55; // internal shade
-  const window_S = win_area * shgf_val * sc * clf;
+  const shgc = Math.min(Math.max(G('sc_glass') || 0.87, 0.1), 1.0); // SHGC (labeled SHGC in UI)
+  const clf = Math.min(Math.max(G('clf_shade') || 0.55, 0.1), 1.0);
+  const window_S = win_area * shgf_val * shgc * clf;
 
   // 5. Wall conduction: Q = U × A × CLTD
   const wall_perimeter = 2 * (len + wid);
@@ -3146,13 +3175,20 @@ function runAll() {
   const u_roof = 0.4; // default
   const roof_S = u_roof * area * cltd_roof;
 
-  // 7. Fresh air load
+  // 7. Fresh air load — ASHRAE moist-air method
+  // Q_sensible = m_dot_da × cp_moist(W_out) × ΔT   [W]
+  // Q_latent   = m_dot_da × h_fg × ΔW               [W]
+  // m_dot_da ≈ ρ_da × V_dot  (ρ_da ≈ 1.2 kg/m³ at standard conditions)
+  // h_fg at 24°C ≈ 2443 kJ/kg; using 2501 kJ/kg (0°C) is conservative & common.
+  // h_fg × ρ_da ≈ 2501 × 1.2 = 3001 kJ/m³ — so latent = 3001000 × fa_m3s × ΔW.
+  // Previous code had 3010000 × rho × fa_m3s × ΔW, double-counting density (×1.2 error).
   const fa_m3s = (occ * fresh_cfm) / 2118.88; // CFM → m³/s
   const W_out = humidityRatio(out_dbt, out_rh);
   const W_in  = humidityRatio(in_dbt, in_rh);
-  const rho = 1.2; // kg/m³
-  const fa_S = 1210 * fa_m3s * (out_dbt - in_dbt); // W
-  const fa_L = 3010000 * fa_m3s * rho * (W_out - W_in); // W
+  const rho_da = 1.2; // kg/m³ dry air at standard conditions
+  const cp_oa = 1.006 + 1.86 * W_out; // kJ/(kg_da·K) at outdoor state (ASHRAE Ch.1)
+  const fa_S = rho_da * cp_oa * 1000 * fa_m3s * (out_dbt - in_dbt); // W
+  const fa_L = 2501 * 1000 * rho_da * fa_m3s * (W_out - W_in);      // W (h_fg × m_dot_da × ΔW)
 
   const totalS = people_S + light_S + equip_S + window_S + wall_S + roof_S + fa_S;
   const totalL = people_L + Math.max(0, fa_L);
@@ -3233,13 +3269,13 @@ function runAll() {
   tbody.innerHTML = `
     <tr><td>People — Sensible</td><td>${occ} × ${pload.sensible} W/person</td><td>${occ} persons</td><td>Activity: ${act.replace(/_/g,' ')}</td><td class="num">${Math.round(people_S)}</td><td class="num">—</td></tr>
     <tr><td>People — Latent</td><td>${occ} × ${pload.latent} W/person</td><td>${occ} persons</td><td>Metabolic latent</td><td class="num">—</td><td class="num">${Math.round(people_L)}</td></tr>
-    <tr><td>Lighting</td><td>A × W/m² × CLF 0.9</td><td>${area.toFixed(1)} m²</td><td>${lighting} W/m²</td><td class="num">${Math.round(light_S)}</td><td class="num">—</td></tr>
-    <tr><td>Equipment</td><td>A × W/m² × div 0.8</td><td>${area.toFixed(1)} m²</td><td>${equip} W/m²</td><td class="num">${Math.round(equip_S)}</td><td class="num">—</td></tr>
-    <tr><td>Window Solar Gain</td><td>A × SHGF × SC × CLF</td><td>${win_area} m²</td><td>SHGF=${shgf_val}, SC=0.87, CLF=0.55</td><td class="num">${Math.round(window_S)}</td><td class="num">—</td></tr>
+    <tr><td>Lighting</td><td>A × W/m² × CLF ${clf_lighting.toFixed(2)}</td><td>${area.toFixed(1)} m²</td><td>${lighting} W/m²</td><td class="num">${Math.round(light_S)}</td><td class="num">—</td></tr>
+    <tr><td>Equipment</td><td>A × W/m² × div ${div_equip.toFixed(2)}</td><td>${area.toFixed(1)} m²</td><td>${equip} W/m²</td><td class="num">${Math.round(equip_S)}</td><td class="num">—</td></tr>
+    <tr><td>Window Solar Gain</td><td>A × SHGF × SHGC × CLF</td><td>${win_area} m²</td><td>SHGF=${shgf_val}, SHGC=${shgc.toFixed(2)}, CLF=${clf.toFixed(2)}</td><td class="num">${Math.round(window_S)}</td><td class="num">—</td></tr>
     <tr><td>Wall Conduction (CLTD)</td><td>U × A × CLTD</td><td>${ext_wall_area.toFixed(1)} m²</td><td>U=${u_wall}, CLTD=${cltd_wall}</td><td class="num">${Math.round(wall_S)}</td><td class="num">—</td></tr>
     <tr><td>Roof / Floor</td><td>U × A × CLTD</td><td>${area.toFixed(1)} m²</td><td>U=0.40, CLTD=${cltd_roof}</td><td class="num">${Math.round(roof_S)}</td><td class="num">—</td></tr>
-    <tr><td>Fresh Air — Sensible</td><td>1210 × Q × ΔT</td><td>${(occ*fresh_cfm).toFixed(0)} CFM</td><td>ΔT = ${(out_dbt-in_dbt).toFixed(1)}°C</td><td class="num">${Math.round(fa_S)}</td><td class="num">—</td></tr>
-    <tr><td>Fresh Air — Latent</td><td>3010 × ṁ × ΔW</td><td>—</td><td>ΔW = ${((W_out-W_in)*1000).toFixed(2)} g/kg</td><td class="num">—</td><td class="num">${Math.round(Math.max(0,fa_L))}</td></tr>
+    <tr><td>Fresh Air — Sensible</td><td>ρ·cp(W_out)·Q·ΔT</td><td>${(occ*fresh_cfm).toFixed(0)} CFM</td><td>ΔT = ${(out_dbt-in_dbt).toFixed(1)}°C · cp=${(1.006+1.86*W_out).toFixed(3)} kJ/(kg·K)</td><td class="num">${Math.round(fa_S)}</td><td class="num">—</td></tr>
+    <tr><td>Fresh Air — Latent</td><td>h_fg·ρ·Q·ΔW</td><td>—</td><td>ΔW = ${((W_out-W_in)*1000).toFixed(2)} g/kg</td><td class="num">—</td><td class="num">${Math.round(Math.max(0,fa_L))}</td></tr>
     <tr class="total-row"><td><b>TOTAL</b></td><td colspan="3">Subtotal Sensible + Latent</td><td class="num"><b>${Math.round(totalS)}</b></td><td class="num"><b>${Math.round(totalL)}</b></td></tr>
     <tr class="total-row" style="background:rgba(0,201,167,0.04)"><td><b>GRAND TOTAL</b></td><td colspan="3">With Safety Factor ${sf_pct}%</td><td class="num" colspan="2" style="color:var(--accent3)"><b>${Math.round(totalLoad * (1+sf_pct/100))} W</b></td></tr>
   `;

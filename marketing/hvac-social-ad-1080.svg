@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1080" viewBox="0 0 1080 1080">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#030712"/>
+      <stop offset="46%" stop-color="#07111f"/>
+      <stop offset="100%" stop-color="#0b1324"/>
+    </linearGradient>
+    <linearGradient id="heroLine" x1="150" y1="220" x2="930" y2="840" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1d9bf0"/>
+      <stop offset="55%" stop-color="#1fd9a4"/>
+      <stop offset="100%" stop-color="#f5a623"/>
+    </linearGradient>
+    <linearGradient id="panelFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#111c2f"/>
+      <stop offset="100%" stop-color="#07101d"/>
+    </linearGradient>
+    <linearGradient id="cta" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1d9bf0"/>
+      <stop offset="100%" stop-color="#1fd9a4"/>
+    </linearGradient>
+    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
+      <path d="M 44 0 L 0 0 0 44" fill="none" stroke="#9fb5d1" stroke-opacity=".055" stroke-width="1"/>
+    </pattern>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="22" stdDeviation="22" flood-color="#000000" flood-opacity=".42"/>
+    </filter>
+    <filter id="glowBlue" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="clipRound">
+      <rect x="598" y="170" width="356" height="584" rx="26"/>
+    </clipPath>
+    <style>
+      .font { font-family: Inter, "SF Pro Display", "Segoe UI", Arial, sans-serif; }
+      .mono { font-family: "SF Mono", "Roboto Mono", Menlo, Consolas, monospace; }
+      .smallCaps { letter-spacing: 3.2px; text-transform: uppercase; }
+      .muted { fill: #8b97b4; }
+      .subtle { fill: #cbd5e1; }
+      .white { fill: #f8fbff; }
+      .blue { fill: #60a5fa; }
+      .teal { fill: #1fd9a4; }
+      .amber { fill: #f5a623; }
+    </style>
+  </defs>
+
+  <rect width="1080" height="1080" fill="url(#bg)"/>
+  <rect width="1080" height="1080" fill="url(#grid)"/>
+  <path d="M-40 876 C 210 780, 340 948, 548 844 C 741 747, 804 548, 1125 548" fill="none" stroke="url(#heroLine)" stroke-width="1.8" stroke-opacity=".33"/>
+  <path d="M-20 928 C 212 822, 420 1004, 648 858 C 820 748, 894 666, 1116 690" fill="none" stroke="#1fd9a4" stroke-width="1.3" stroke-opacity=".20"/>
+  <path d="M66 100 L 1014 100 M66 980 L1014 980 M100 66 L100 1014 M980 66 L980 1014" fill="none" stroke="#ffffff" stroke-opacity=".075"/>
+
+  <g transform="translate(92 82)">
+    <image href="muskit-hvac-icon.png" x="0" y="0" width="78" height="78" preserveAspectRatio="xMidYMid slice"/>
+    <text x="98" y="32" class="font white" font-size="24" font-weight="700">Musk-IT</text>
+    <text x="98" y="60" class="mono muted smallCaps" font-size="11">HVAC Design Platform</text>
+  </g>
+
+  <g transform="translate(92 216)">
+    <rect x="0" y="-44" width="266" height="34" rx="17" fill="#1d9bf0" fill-opacity=".12" stroke="#1d9bf0" stroke-opacity=".32"/>
+    <circle cx="22" cy="-27" r="5" fill="#1fd9a4"/>
+    <text x="38" y="-23" class="mono blue smallCaps" font-size="12" font-weight="700">AI Integrated HVAC</text>
+
+    <text x="0" y="48" class="font white" font-size="70" font-weight="800">Load</text>
+    <text x="0" y="128" class="font white" font-size="70" font-weight="800">Calculation</text>
+    <text x="0" y="208" class="font white" font-size="70" font-weight="800">&amp; Design</text>
+    <text x="0" y="288" class="font white" font-size="70" font-weight="800">Automation</text>
+
+    <text x="0" y="344" class="font subtle" font-size="26" font-weight="500">Engineering-first calculations.</text>
+    <text x="0" y="382" class="font subtle" font-size="26" font-weight="500">AI-assisted system design.</text>
+
+    <g class="mono" font-size="14" font-weight="700">
+      <rect x="0" y="428" width="128" height="40" rx="20" fill="#ffffff" fill-opacity=".06" stroke="#ffffff" stroke-opacity=".12"/>
+      <text x="22" y="454" fill="#dbeafe">Cooling Load</text>
+      <rect x="142" y="428" width="100" height="40" rx="20" fill="#ffffff" fill-opacity=".06" stroke="#ffffff" stroke-opacity=".12"/>
+      <text x="164" y="454" fill="#d1fae5">Airflow</text>
+      <rect x="256" y="428" width="126" height="40" rx="20" fill="#ffffff" fill-opacity=".06" stroke="#ffffff" stroke-opacity=".12"/>
+      <text x="278" y="454" fill="#fef3c7">Equipment</text>
+      <rect x="0" y="482" width="104" height="40" rx="20" fill="#ffffff" fill-opacity=".06" stroke="#ffffff" stroke-opacity=".12"/>
+      <text x="23" y="508" fill="#dbeafe">Energy</text>
+      <rect x="118" y="482" width="94" height="40" rx="20" fill="#ffffff" fill-opacity=".06" stroke="#ffffff" stroke-opacity=".12"/>
+      <text x="141" y="508" fill="#d1fae5">Report</text>
+      <rect x="226" y="482" width="158" height="40" rx="20" fill="#ffffff" fill-opacity=".06" stroke="#ffffff" stroke-opacity=".12"/>
+      <text x="250" y="508" fill="#fef3c7">AI Design</text>
+    </g>
+
+    <g transform="translate(0 580)">
+      <rect x="0" y="0" width="432" height="72" rx="18" fill="url(#cta)"/>
+      <text x="32" y="47" class="font" fill="#03111f" font-size="25" font-weight="800">Try it at hvac.muskit.in</text>
+      <path d="M374 24h29m0 0-12-12m12 12-12 12" fill="none" stroke="#03111f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+
+  <g transform="translate(576 132)" filter="url(#softShadow)">
+    <rect x="0" y="0" width="420" height="690" rx="34" fill="url(#panelFill)" stroke="#ffffff" stroke-opacity=".12"/>
+    <rect x="22" y="22" width="376" height="646" rx="26" fill="#09111f" stroke="#ffffff" stroke-opacity=".07"/>
+  </g>
+
+  <g clip-path="url(#clipRound)">
+    <rect x="598" y="170" width="356" height="584" fill="#09111f"/>
+    <rect x="598" y="170" width="356" height="584" fill="url(#grid)" opacity=".75"/>
+
+    <g transform="translate(626 202)">
+      <text x="0" y="0" class="mono muted smallCaps" font-size="11">Live Design Snapshot</text>
+      <text x="0" y="38" class="font white" font-size="26" font-weight="800">Validated HVAC System</text>
+      <rect x="258" y="8" width="68" height="28" rx="14" fill="#1fd9a4" fill-opacity=".14" stroke="#1fd9a4" stroke-opacity=".4"/>
+      <text x="274" y="27" class="mono teal" font-size="11" font-weight="800">PASS</text>
+    </g>
+
+    <g transform="translate(626 286)">
+      <rect x="0" y="0" width="142" height="94" rx="18" fill="#ffffff" fill-opacity=".055" stroke="#ffffff" stroke-opacity=".10"/>
+      <text x="18" y="29" class="mono muted smallCaps" font-size="10">Cooling</text>
+      <text x="18" y="66" class="mono white" font-size="27" font-weight="800">42.8</text>
+      <text x="86" y="66" class="mono blue" font-size="15" font-weight="700">kW</text>
+
+      <rect x="160" y="0" width="166" height="94" rx="18" fill="#ffffff" fill-opacity=".055" stroke="#ffffff" stroke-opacity=".10"/>
+      <text x="178" y="29" class="mono muted smallCaps" font-size="10">Selected</text>
+      <text x="178" y="66" class="mono white" font-size="27" font-weight="800">12.2</text>
+      <text x="246" y="66" class="mono teal" font-size="15" font-weight="700">TR</text>
+
+      <rect x="0" y="112" width="142" height="94" rx="18" fill="#ffffff" fill-opacity=".055" stroke="#ffffff" stroke-opacity=".10"/>
+      <text x="18" y="141" class="mono muted smallCaps" font-size="10">Supply Air</text>
+      <text x="18" y="178" class="mono white" font-size="27" font-weight="800">7850</text>
+      <text x="92" y="178" class="mono blue" font-size="15" font-weight="700">CFM</text>
+
+      <rect x="160" y="112" width="166" height="94" rx="18" fill="#ffffff" fill-opacity=".055" stroke="#ffffff" stroke-opacity=".10"/>
+      <text x="178" y="141" class="mono muted smallCaps" font-size="10">Fresh Air</text>
+      <text x="178" y="178" class="mono white" font-size="27" font-weight="800">1250</text>
+      <text x="252" y="178" class="mono amber" font-size="15" font-weight="700">CFM</text>
+    </g>
+
+    <g transform="translate(626 538)">
+      <rect x="0" y="0" width="326" height="162" rx="20" fill="#ffffff" fill-opacity=".045" stroke="#ffffff" stroke-opacity=".10"/>
+      <text x="20" y="30" class="mono muted smallCaps" font-size="10">Airside Schematic</text>
+
+      <path d="M38 86 H105 C121 86 131 73 148 73 H214 C233 73 245 96 262 96 H294" fill="none" stroke="#60a5fa" stroke-width="8" stroke-linecap="round" stroke-opacity=".95"/>
+      <path d="M38 112 H112 C127 112 135 126 151 126 H218 C234 126 244 106 263 106 H294" fill="none" stroke="#1fd9a4" stroke-width="8" stroke-linecap="round" stroke-opacity=".85"/>
+      <path d="M82 63 L82 134 M138 58 L138 138 M221 58 L221 138 M276 70 L276 124" stroke="#ffffff" stroke-opacity=".16" stroke-width="2"/>
+      <circle cx="82" cy="86" r="19" fill="#0c1728" stroke="#60a5fa" stroke-width="3"/>
+      <path d="M72 86c10-13 20-13 30 0-10 13-20 13-30 0Z" fill="#60a5fa" fill-opacity=".22" stroke="#60a5fa" stroke-width="2"/>
+      <rect x="128" y="54" width="34" height="96" rx="8" fill="#0c1728" stroke="#1fd9a4" stroke-width="3"/>
+      <path d="M136 67h18M136 85h18M136 103h18M136 121h18M136 139h18" stroke="#1fd9a4" stroke-width="2" stroke-opacity=".8"/>
+      <rect x="201" y="62" width="44" height="82" rx="10" fill="#0c1728" stroke="#f5a623" stroke-width="3"/>
+      <path d="M211 79h24M211 101h24M211 123h24" stroke="#f5a623" stroke-width="2"/>
+      <circle cx="276" cy="96" r="18" fill="#0c1728" stroke="#ffffff" stroke-opacity=".45" stroke-width="2"/>
+      <path d="M268 96h16m-8-8v16" stroke="#f8fbff" stroke-width="3" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <g transform="translate(92 932)">
+    <line x1="0" y1="0" x2="896" y2="0" stroke="#ffffff" stroke-opacity=".10"/>
+    <text x="0" y="44" class="mono muted smallCaps" font-size="12">For consultants, contractors, projects and HVAC teams</text>
+    <text x="648" y="44" class="mono white" font-size="18" font-weight="800">hvac.muskit.in</text>
+  </g>
+</svg>
