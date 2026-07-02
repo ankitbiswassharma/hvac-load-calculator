@@ -5170,24 +5170,45 @@
       : null;
     const recirculationSystemSelection = equipmentSelection;
     const coolingAndRecirculationShareFan = coolingSystemSelection === recirculationSystemSelection;
+    // Operating fan power = electrical input at the design point
+    // (brake kW / η_motor). The previous max(electrical, installed motor kW)
+    // always resolved to the INSTALLED motor rating (next standard frame
+    // after the 1.15 service factor), overstating operating power and annual
+    // fan energy by ~15–30%. Installed motor size stays available separately
+    // via motor_kw / recommendedMotorKW for BOQ and electrical design.
     const coolingFanDesignKW = coolingSystemSelection && !coolingAndRecirculationShareFan
       ? Math.max(
-          coolingSystemSelection.electricalFanKWTotal || 0,
-          coolingSystemSelection.recommendedMotorKW || 0
+          coolingSystemSelection.electricalFanKWTotal
+            || coolingSystemSelection.recommendedMotorKW
+            || 0,
+          0
         )
       : 0;
     const recirculationFanDesignKW = recirculationSystemSelection
       ? Math.max(
-          recirculationSystemSelection.electricalFanKWTotal || 0,
-          recirculationSystemSelection.recommendedMotorKW || 0
+          recirculationSystemSelection.electricalFanKWTotal
+            || recirculationSystemSelection.recommendedMotorKW
+            || 0,
+          0
         )
       : 0;
     const ventilationFanDesignKW = roundTo(
       (dedicatedVentilationSelection
-        ? Math.max(dedicatedVentilationSelection.electricalFanKWTotal || 0, dedicatedVentilationSelection.recommendedMotorKW || 0)
+        ? Math.max(
+            dedicatedVentilationSelection.electricalFanKWTotal
+              || dedicatedVentilationSelection.recommendedMotorKW
+              || 0,
+            0
+          )
         : 0)
       + (processAirSelection
-        ? Math.max(processAirSelection.motorKW || 0, processAirSelection.brakeKW || 0)
+        ? Math.max(
+            processAirSelection.electricalKW
+              || safeDiv(processAirSelection.brakeKW || 0, 0.92, 0)
+              || processAirSelection.motorKW
+              || 0,
+            0
+          )
         : 0),
       2
     );

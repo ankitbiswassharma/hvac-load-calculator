@@ -17,6 +17,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
+    "golden:update": "node scripts/generate-golden-values.js",
     "db:migrate:json": "node scripts/migrate-json-to-postgres.js",
     "climate:seed:legacy": "node scripts/import-climate-data.js --legacy-inline --replace=true",
     "climate:import": "node scripts/import-climate-data.js"

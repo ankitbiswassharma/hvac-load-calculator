@@ -46,3 +46,24 @@ OPENAI_MODEL=gpt-5.4-mini
 ```sh
 npm start
 ```
+
+## Golden Calculation Regression
+
+Every calculation engine is pinned against a golden snapshot
+(`tests/golden/goldenValues.json`) covering ASHRAE psychrometrics, solar,
+load components, airflow/duct/fan physics, catalog fan + AHU selection, the
+full ASHRAE designer, three end-to-end room scenarios (comfort office,
+ISO 7 cleanroom, high-latent humid hall), BOQ costing, and the Python
+bin-method energy engine.
+
+`npm test` recomputes everything and fails if any result deviates from the
+snapshot, so designers can rely on calculations staying reproducible. After
+a deliberate, reviewed change to calculation logic, regenerate the snapshot
+with:
+
+```
+npm run golden:update
+```
+
+The JSON diff in the pull request then documents exactly which numbers
+changed and by how much.

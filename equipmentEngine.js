@@ -191,6 +191,11 @@
       ratedESP: best.ratedESP,
       efficiency: best.efficiency,
       brakeKW: roundTo(brakeKW, 2),
+      // Operating electrical input at the design point (brake / η_motor).
+      // Use this for energy; motorKW below is the INSTALLED size (next
+      // standard frame after ×1.15 service factor) and must not be used
+      // as operating power.
+      electricalKW: roundTo(motorElectricalInputKW, 2),
       motorKW: roundTo(Math.max(motorKw, 0.25), 2),
       preferredType: point.preferredType,
       withinRange: point.withinRange,
