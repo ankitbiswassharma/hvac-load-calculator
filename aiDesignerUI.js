@@ -156,19 +156,19 @@
   // Renderers
   // -----------------------------------------------------------------
   function chip(text, tone) {
-    // Dark-theme chips — semitransparent fills over var(--bg3)
-    const bg = tone === "ok"   ? "rgba(0,201,167,0.16)"
-             : tone === "warn" ? "rgba(245,158,11,0.18)"
-             : tone === "bad"  ? "rgba(239,68,68,0.18)"
-             :                   "rgba(0,144,255,0.18)";
-    const fg = tone === "ok"   ? "#22d3a3"
-             : tone === "warn" ? "#fbbf24"
-             : tone === "bad"  ? "#f87171"
-             :                   "#60a5fa";
-    const border = tone === "ok"   ? "rgba(0,201,167,0.35)"
-                 : tone === "warn" ? "rgba(245,158,11,0.4)"
-                 : tone === "bad"  ? "rgba(239,68,68,0.4)"
-                 :                   "rgba(0,144,255,0.4)";
+    // Light-theme chips — soft tints over white/var(--bg3)
+    const bg = tone === "ok"   ? "rgba(13,148,136,0.08)"
+             : tone === "warn" ? "rgba(217,119,6,0.08)"
+             : tone === "bad"  ? "rgba(220,38,38,0.07)"
+             :                   "rgba(2,132,199,0.08)";
+    const fg = tone === "ok"   ? "#0d9488"
+             : tone === "warn" ? "#b45309"
+             : tone === "bad"  ? "#dc2626"
+             :                   "#0369a1";
+    const border = tone === "ok"   ? "rgba(13,148,136,0.30)"
+                 : tone === "warn" ? "rgba(217,119,6,0.32)"
+                 : tone === "bad"  ? "rgba(220,38,38,0.30)"
+                 :                   "rgba(2,132,199,0.32)";
     return '<span style="display:inline-block;padding:2px 10px;border-radius:9999px;'
       + 'font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;'
       + 'background:' + bg + ';color:' + fg + ';border:1px solid ' + border + ';">' + text + '</span>';
