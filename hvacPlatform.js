@@ -6965,21 +6965,7 @@
       + reportSummaryCard("Fan / ESP", formatNumber(fans.totalFanKW || 0, 2) + " kW", formatInt(esp.totalPa || 0) + " Pa · " + formatNumber(fans.specificFanPowerKWPerTR || 0, 2) + " kW/TR")
       + reportSummaryCard("Energy", energyReady ? formatInt(energy.annual_energy_kwh || 0) + " kWh" : "Pending", energyReady ? formatCurrency(energy.energy_cost || 0) + " annual cost" : "Run energy simulation for annual values")
       + reportSummaryCard("Equipment", finalDesign.equipment && finalDesign.equipment.selectedAhuModel || "Selected AHU", formatNumber(finalDesign.equipment && finalDesign.equipment.selectedAhuTR || 0, 1) + " TR selected")
-      + reportSummaryCard("Project scope", formatInt(totalRooms || 1) + " room(s)", "Active room result plus project roll-up")
-      + '</div>';
-  }
-
-  function buildReportQualityStrip(result, energyReady) {
-    const finalized = ensureFinalizedResult(result || {}, { promoteEnergySimulation: false });
-    const finalDesign = finalized.finalDesign || {};
-    const validation = finalized.validationState || finalized.validation || {};
-    const consistency = finalized.reportConsistency || {};
-    const aiReady = !!(finalized.designAdvisor && finalized.designAdvisor.assistant);
-    return '<div class="report-summary-grid" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-top:14px;">'
-      + reportSummaryCard("Source of truth", "Finalized model", "Design " + (finalDesign.complianceMode || finalized.complianceMode || "comfort_ventilation") + " · Energy " + (energyReady ? "final" : "pending"))
-      + reportSummaryCard("Report gate", consistency.ok === false ? "Blocked" : "Passed", consistency.ok === false ? "Consistency failure" : "Final-design consistency checked")
-      + reportSummaryCard("Engineering status", validation.status || "REVIEW", "Confidence " + formatNumber((validation.confidenceScore || 0) * 100, 0) + "%")
-      + reportSummaryCard("AI assistant", aiReady ? "Included" : "Local summary", aiReady ? "Structured design diagnostics" : "Generated from engineering facts")
+      + reportSummaryCard("Compliance mode", (finalDesign.complianceMode || finalized.complianceMode || "comfort_ventilation").replace(/_/g, " "), "Energy " + (energyReady ? "finalized" : "pending") + " · Consistency checked")
       + '</div>';
   }
 
@@ -7050,7 +7036,6 @@
       + '</div>'
       + '<div class="report-exec-band">'
       + buildReportExecutiveSummary(result, totalRooms, energyReady)
-      + buildReportQualityStrip(result, energyReady)
       + buildReportIndexMarkup()
       + '</div>'
       + '</div>';
@@ -7177,73 +7162,14 @@
           + 'before printing to capture the engine output here.'
           + '</div>';
       }
-      const fd = (calc.finalDesign || {});
-      const loads = fd.loads || {};
-      const airflow = fd.airflow || {};
-      const fans = fd.fans || {};
-      const esp = fd.esp || {};
-      const equip = fd.equipment || {};
-      const vent = fd.ventilation || {};
-      const finalized = ensureFinalizedResult(calc, { promoteEnergySimulation: false });
-      const validation = finalized.validationState || finalized.validation || {};
-
-      const syntheticCards = '<div class="report-summary-grid">'
-        + reportSummaryCard("Cooling load", formatNumber((loads.totalLoadW || calc.totalLoad || 0) / 1000, 2) + " kW", formatInt(loads.totalLoadW || calc.totalLoad || 0) + " W total")
-        + reportSummaryCard("Design duty", formatNumber(loads.trFinal || calc.tr_final || 0, 2) + " TR", "Coil duty at cooling airflow")
-        + reportSummaryCard("Selected AHU", equip.selectedAhuModel || (calc.equipmentSelection && calc.equipmentSelection.ahu && calc.equipmentSelection.ahu.model) || "—", formatNumber(equip.selectedAhuTR || calc.tr_catalog || 0, 1) + " TR catalog")
-        + reportSummaryCard("Supply airflow", formatInt(airflow.coolingCFM || calc.cfm_cooling_coil || 0) + " CFM", formatNumber(
-            airflow.cfmPerTR
-            || (calc.airflowBasis && calc.airflowBasis.designCFMPerTR)
-            || safeDiv(airflow.coolingCFM || calc.cfm_cooling_coil || 0, Math.max(loads.trFinal || calc.tr_equipment || calc.tr_final || 0.1, 0.1), 0),
-            0) + " CFM/TR")
-        + reportSummaryCard("Total ESP", formatInt(esp.totalPa || calc.total_esp || 0) + " Pa", formatNumber((esp.totalPa || calc.total_esp || 0) / 249.09, 2) + " in.w.g.")
-        + reportSummaryCard("Fan power", formatNumber(fans.totalFanKW || 0, 2) + " kW", formatNumber(fans.specificFanPowerKWPerTR || 0, 2) + " kW/TR")
-        + reportSummaryCard("Ventilation OA", formatInt(calc.fresh_total_cfm || airflow.ventilationCFM || 0) + " CFM", (finalized.ventilationComplianceStatus || "COMPLIANT") + " · " + (finalized.achComplianceStatus || "ADVISORY"))
-        + reportSummaryCard("Validation", validation.status || "REVIEW", "Confidence " + formatNumber((validation.confidenceScore || 0) * 100, 0) + "%")
-        + '</div>';
-
-      // Input design basis table
-      const inp = calc.inputs || {};
-      const inpTable = '<table style="width:100%;border-collapse:collapse;margin-top:8px;">'
-        + '<thead><tr><th>Parameter</th><th>Value</th><th>Parameter</th><th>Value</th></tr></thead>'
-        + '<tbody>'
-        + '<tr><td>Room dimensions</td><td class="num">' + inp.len + ' × ' + inp.wid + ' × ' + inp.ht + ' m</td><td>Floor area</td><td class="num">' + formatNumber(calc.area || 0, 1) + ' m²</td></tr>'
-        + '<tr><td>Outdoor DBT / RH</td><td class="num">' + inp.out_dbt + ' °C / ' + formatNumber(calc.outdoorRelativeHumidity || 0, 0) + ' %</td><td>Indoor DBT / RH</td><td class="num">' + inp.in_dbt + ' °C / ' + inp.in_rh + ' %</td></tr>'
-        + '<tr><td>Occupants / activity</td><td class="num">' + inp.occ + ' persons · ' + String(inp.occ_act).replace(/_/g, " ") + '</td><td>Fresh air</td><td class="num">' + inp.fresh_cfm + ' CFM/person</td></tr>'
-        + '<tr><td>Lighting / Equipment</td><td class="num">' + inp.lighting + ' W/m² / ' + inp.equip + ' W/m²</td><td>Roof exposure</td><td class="num">' + String(inp.roof_exp).replace(/_/g, " ") + '</td></tr>'
-        + '<tr><td>Wall U-value / Roof U-value</td><td class="num">' + inp.u_wall + ' / ' + inp.u_roof + ' W/m²K</td><td>Compliance mode</td><td class="num">' + escapeHtml(calc.complianceMode || "comfort_ventilation") + '</td></tr>'
-        + '</tbody></table>';
-
-      // Load component summary
-      const sensible = formatInt(calc.totalS || loads.sensibleW || 0);
-      const latent   = formatInt(calc.totalL || loads.latentW || 0);
-      const total    = formatInt(calc.totalLoad || loads.totalLoadW || 0);
-      const shr      = formatNumber(calc.shr || (calc.totalS / Math.max(calc.totalLoad, 1)) || 0, 3);
-
+      // Compact pointer — the finalized design basis, loads, airflow, ESP and
+      // fan data are already printed in sections 01–08; repeating them here
+      // was the main source of duplicated data in the PDF package.
       return '<div class="report-inline-note" style="background:#eff6ff;border-left-color:#3b82f6;color:#1e3a8a;">'
-        + '<b>Data source:</b> Finalized calculation result (ASHRAE CLTD method) — engine/ashrae full-design API result will appear here once generated from the AI Design Studio.'
-        + '</div>'
-        + '<div class="report-subtitle">System Design Summary</div>'
-        + syntheticCards
-        + '<div class="report-grid-2" style="margin-top:16px;">'
-        + '<div><div class="report-subtitle">Design Basis</div>' + inpTable + '</div>'
-        + '<div><div class="report-subtitle">Load Summary</div>'
-        + '<table style="width:100%;border-collapse:collapse;">'
-        + '<thead><tr><th>Metric</th><th>Value</th><th>Unit</th></tr></thead>'
-        + '<tbody>'
-        + '<tr><td>Total sensible</td><td class="num">' + sensible + '</td><td>W</td></tr>'
-        + '<tr><td>Total latent</td><td class="num">' + latent + '</td><td>W</td></tr>'
-        + '<tr><td>Grand total</td><td class="num"><b>' + total + '</b></td><td>W</td></tr>'
-        + '<tr><td>System SHR</td><td class="num">' + shr + '</td><td>—</td></tr>'
-        + '<tr><td>Design TR</td><td class="num">' + formatNumber(loads.trFinal || calc.tr_final || 0, 2) + '</td><td>TR</td></tr>'
-        + '<tr><td>Catalog TR (selected)</td><td class="num"><b>' + formatNumber(loads.trCatalog || calc.tr_catalog || 0, 1) + '</b></td><td>TR</td></tr>'
-        + '<tr><td>Cooling airflow</td><td class="num">' + formatInt(airflow.coolingCFM || calc.cfm_cooling_coil || 0) + '</td><td>CFM</td></tr>'
-        + '<tr><td>Ventilation OA</td><td class="num">' + formatInt(calc.fresh_total_cfm || airflow.ventilationCFM || 0) + '</td><td>CFM</td></tr>'
-        + '<tr><td>ACH provided</td><td class="num">' + formatNumber(airflow.ach || calc.ach || 0, 1) + '</td><td>ACH</td></tr>'
-        + '<tr><td>Total ESP</td><td class="num">' + formatInt(esp.totalPa || calc.total_esp || 0) + '</td><td>Pa</td></tr>'
-        + '<tr><td>Fan motor power</td><td class="num">' + formatNumber(fans.totalFanKW || 0, 2) + '</td><td>kW</td></tr>'
-        + '</tbody></table>'
-        + '</div></div>';
+        + '<b>Engine design not generated for this session.</b> Open the <b>AI Design Studio</b> panel and click '
+        + '<b>Generate full design</b> before printing to capture the engine/ashrae full-sized design here. '
+        + 'The finalized ASHRAE CLTD calculation for this room is documented in sections 01–10 of this report.'
+        + '</div>';
     }
     const design = payload.design;
     const a = design.aggregate || {};
@@ -7411,7 +7337,6 @@
         ? '<div class="report-inline-note"><b>' + escapeHtml(optimization.finalRecommendation.title || "Recommendation") + ':</b> ' + escapeHtml(optimization.finalRecommendation.rationale || "") + '</div>'
         : '<div class="report-inline-note">' + escapeHtml(alternatives && alternatives.summary ? alternatives.summary : "No optimization-backed recommendation is available yet.") + '</div>')
       + '</div></div>'
-      + firstResultsGridMarkup("p-ai")
       + (assistant
         ? '<div class="report-subtitle">AI HVAC Design Assistant</div>'
           + '<div class="report-ai-metric-grid">'
@@ -7423,11 +7348,6 @@
               + '</div>';
           }).join("")
           + '</div>'
-          + '<div class="table-wrap" style="margin-top:10px;"><table class="calc-table"><thead><tr><th>METRIC</th><th>VALUE</th><th>STATUS</th></tr></thead><tbody>'
-          + assistant.metrics.map(function (metric) {
-            return '<tr><td>' + escapeHtml(metric.label) + '</td><td class="num">' + formatNumber(metric.value || 0, metric.key === "shr" || metric.key === "bypass" ? 2 : metric.key === "cfm_per_tr" ? 0 : 1) + ' ' + escapeHtml(metric.unit || "") + '</td><td>' + escapeHtml(metric.status || "review") + '</td></tr>';
-          }).join("")
-          + '</tbody></table></div>'
           + '<div class="report-ai-card-grid">'
           + assistant.sections.map(function (section) {
             return '<div class="report-ai-card"><div class="report-ai-card-title">' + escapeHtml(section.title) + '</div><div class="report-ai-card-body">' + escapeHtml((section.bullets || []).join(" ")) + '</div></div>';
@@ -7437,15 +7357,11 @@
       + '<div class="report-grid-2">'
       + '<div>'
       + '<div class="report-subtitle">AI Review Assistant</div>'
-      + '<div class="report-inline-note">Source: ' + escapeHtml(designAdvisorSourceLabel(designAdvisor && designAdvisor.provider)) + '</div>'
-      + '<div class="report-inline-note">' + escapeHtml(designAdvisorStatusLabel(designAdvisorStatus, designAdvisor && designAdvisor.provider, designAdvisorError)) + (designAdvisorTimestamp(designAdvisorMeta) ? ' Updated ' + escapeHtml(designAdvisorTimestamp(designAdvisorMeta)) + '.' : '') + '</div>'
       + '<div class="report-inline-note" style="margin-bottom:10px;">' + escapeHtml(designAdvisor && designAdvisor.summary ? designAdvisor.summary : "No AI review summary available.") + '</div>'
       + designAdvisorCardsMarkup(designAdvisor && designAdvisor.items ? designAdvisor.items : [], false)
       + '</div>'
       + '<div>'
       + '<div class="report-subtitle">AI Alternatives Summary</div>'
-      + '<div class="report-inline-note">Source: ' + escapeHtml(designAlternativesSourceLabel(alternatives && alternatives.provider)) + '</div>'
-      + '<div class="report-inline-note">' + escapeHtml(designAlternativesStatusLabel(alternativesStatus, alternatives && alternatives.provider, alternativesError)) + (designAdvisorTimestamp(alternativesMeta) ? ' Updated ' + escapeHtml(designAdvisorTimestamp(alternativesMeta)) + '.' : '') + '</div>'
       + '<div class="report-inline-note">' + escapeHtml(alternatives && alternatives.summary ? alternatives.summary : "No alternative-design summary available.") + '</div>'
       + (alternatives && alternatives.standardsNote
         ? '<div class="report-inline-note">' + escapeHtml(alternatives.standardsNote) + '</div>'
@@ -8710,10 +8626,7 @@
         + '<div class="table-wrap">' + outerHtml("cooling-table") + "</div>"
       )
       + reportBlock("03 · SHR", innerHtml("shr-content"))
-      + reportBlock("04 · TONNAGE",
-        innerHtml("tonnage-detail")
-        + '<div class="report-inline-note">Catalog reference size: ' + formatNumber(result.tr_catalog, 1) + " TR | Final design duty: " + formatNumber(result.tr_final, 2) + " TR</div>"
-      )
+      + reportBlock("04 · TONNAGE", innerHtml("tonnage-detail"))
       + reportBlock("05 · AIRFLOW", innerHtml("airflow-detail"))
       + reportBlock("06 · DUCT SIZING", outerHtml("duct-cards") + '<div class="table-wrap">' + outerHtml("duct-table") + "</div>")
       + reportBlock("07 · ESP", innerHtml("esp-table-wrap"))
@@ -8756,8 +8669,7 @@
       )
       + reportBlock("15 · ENERGY SIMULATION",
         energyReady
-          ? firstResultsGridMarkup("p-energy")
-            + '<div class="report-grid-2">'
+          ? '<div class="report-grid-2">'
             + '<div><div class="report-subtitle">Active Room Annual Summary</div>' + innerHtml("energy-summary-table") + "</div>"
             + '<div><div class="report-subtitle">Project Roll-Up</div>' + innerHtml("energy-project-rollup") + "</div>"
             + "</div>"
@@ -8778,7 +8690,6 @@
       )
       + reportBlock("17 · 3D SCHEMATIC SUMMARY",
         '<div class="s17-wrap">'
-        + firstResultsGridMarkup("p-schematic3d")
         + '<div class="report-subtitle">Schematic Basis</div><div class="table-wrap">' + innerHtml("schematic3d-summary") + '</div>'
         + '<div class="report-subtitle">AHU / Zone Schedule</div>' + innerHtml("schematic3d-schedule")
         + '<div class="report-inline-note">' + escapeHtml(byId("schematic3d-disclaimer") ? byId("schematic3d-disclaimer").textContent : "3D schematic is a coordination visual and not a fabrication drawing.") + '</div>'
