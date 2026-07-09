@@ -61,14 +61,14 @@
     "specificFanPowerKWPerTR": 0.14
   },
   "designer": {
-    "totalSensibleW": 16335,
+    "totalSensibleW": 17982,
     "totalLatentW": 6813,
-    "totalLoadW": 23148,
-    "designTR": 6.58,
+    "totalLoadW": 24795,
+    "designTR": 7.05,
     "selectedTR": 7.5,
-    "totalCfm": 3012,
-    "fanShaftKw": 1.05,
-    "fanMotorInputKw": 1.14,
+    "totalCfm": 3315,
+    "fanShaftKw": 1.16,
+    "fanMotorInputKw": 1.26,
     "fanWPerCfm": 0.38,
     "ashrae90_1Compliant": true
   },
@@ -79,28 +79,28 @@
         "peopleLatent": 500,
         "lightingSensible": 2808,
         "equipmentSensible": 3120,
-        "windowSensible": 3928.902046,
-        "wallSensible": 1058.4,
+        "windowSensible": 4907,
+        "wallSensible": 1933,
         "roofSensible": 0,
         "infiltrationSensible": 3130.555813,
         "infiltrationLatent": 7229.533073,
         "freshAirSensible": 1954.019226,
         "freshAirLatent": 4512.504316,
-        "totalSensible": 16649.877086,
+        "totalSensible": 18502.575039,
         "totalLatent": 12242.037389,
-        "totalLoad": 28891.914475,
-        "systemShr": 0.576282,
-        "roomShr": 0.655322
+        "totalLoad": 30744.612428,
+        "systemShr": 0.601815,
+        "roomShr": 0.681625
       },
       "tonnage": {
-        "trDesign": 8.214932,
-        "trCoolingCoil": 8.378504,
-        "trFinal": 8.378504,
+        "trDesign": 8.741715,
+        "trCoolingCoil": 8.905289,
+        "trFinal": 8.905289,
         "trCatalog": 10,
         "trCatalogEquipment": 10
       },
       "airflow": {
-        "cfmThermal": 2583.522575,
+        "cfmThermal": 2937.705624,
         "cfmVent": 217.9,
         "cfmAch": 4437.876387,
         "cfmConditioned": 4450,
@@ -111,27 +111,27 @@
         "ach": 7.269806
       },
       "psychro": {
-        "supplyTemp": 15.78,
-        "supplyHumidity": 0.006596,
+        "supplyTemp": 15,
+        "supplyHumidity": 0.006595,
         "mixedAirTemp": 22.897267,
         "oaFraction": 0.048966,
-        "coilTotalLoad": 29467.2,
-        "coilSensibleLoad": 16845.5,
-        "adpTemp": -2.22,
-        "bypassFactor": 0.6593
+        "coilTotalLoad": 31319.9,
+        "coilSensibleLoad": 18691.6,
+        "adpTemp": -3,
+        "bypassFactor": 0.6559
       },
       "fansAndEsp": {
         "totalEsp": 358,
         "coolingFanKw": 0,
-        "recirculationFanKw": 1.27,
+        "recirculationFanKw": 1.29,
         "ventilationFanKw": 0,
-        "totalFanKw": 1.27,
-        "installedMotorKw": 1.65
+        "totalFanKw": 1.29,
+        "installedMotorKw": 1.5
       },
       "equipment": {
-        "ahuModel": "AHU-03 + AHU-06",
-        "ahuCapacityTR": 9,
-        "fanCurveId": "FC-01, FC-02"
+        "ahuModel": "AHU-10",
+        "ahuCapacityTR": 10,
+        "fanCurveId": "FC-02"
       },
       "diffusers": {
         "count": 21,
@@ -147,62 +147,62 @@
         "lightingSensible": 1209.6,
         "equipmentSensible": 2688,
         "windowSensible": 0,
-        "wallSensible": 1069.2,
-        "roofSensible": 4160,
+        "wallSensible": 1887,
+        "roofSensible": 6505,
         "infiltrationSensible": 192.267326,
         "infiltrationLatent": 411.16173,
         "freshAirSensible": 2727.733497,
         "freshAirLatent": 5833.230455,
-        "totalSensible": 12496.800823,
+        "totalSensible": 15659.600823,
         "totalLatent": 6574.392185,
-        "totalLoad": 19071.193009,
-        "systemShr": 0.655271,
-        "roomShr": 0.929482
+        "totalLoad": 22233.993009,
+        "systemShr": 0.704309,
+        "roomShr": 0.945794
       },
       "tonnage": {
-        "trDesign": 5.422574,
-        "trCoolingCoil": 2.988399,
-        "trFinal": 5.422574,
-        "trCatalog": 6,
-        "trCatalogEquipment": 3
+        "trDesign": 6.321863,
+        "trCoolingCoil": 3.887688,
+        "trFinal": 6.321863,
+        "trCatalog": 7.5,
+        "trCatalogEquipment": 4
       },
       "airflow": {
-        "cfmThermal": 2475.129742,
+        "cfmThermal": 3369.92388,
         "cfmVent": 288,
         "cfmAch": 8475.519891,
-        "cfmConditioned": 8525,
-        "cfmCoolingCoil": 2500,
+        "cfmConditioned": 8500,
+        "cfmCoolingCoil": 3375,
         "cfmDedicatedVentilation": 300,
         "cfmProcessExcess": 0,
-        "cfmFinal": 8825,
-        "ach": 52.061703
+        "cfmFinal": 8800,
+        "ach": 51.91422
       },
       "psychro": {
-        "supplyTemp": 13.68,
-        "supplyHumidity": 0.008045,
+        "supplyTemp": 13.82,
+        "supplyHumidity": 0.008105,
         "mixedAirTemp": 21,
         "oaFraction": 0,
-        "coilTotalLoad": 10510.2,
-        "coilSensibleLoad": 9769.5,
-        "adpTemp": 9.53,
-        "bypassFactor": 0.3717
+        "coilTotalLoad": 13673,
+        "coilSensibleLoad": 12937.3,
+        "adpTemp": 9.72,
+        "bypassFactor": 0.3638
       },
       "fansAndEsp": {
         "totalEsp": 309,
-        "coolingFanKw": 0.7,
+        "coolingFanKw": 0.93,
         "recirculationFanKw": 2.23,
         "ventilationFanKw": 0.07,
-        "totalFanKw": 3,
+        "totalFanKw": 3.23,
         "installedMotorKw": 2.75
       },
       "equipment": {
-        "ahuModel": "AHU-03",
-        "ahuCapacityTR": 3,
+        "ahuModel": "AHU-04",
+        "ahuCapacityTR": 4,
         "fanCurveId": "FC-01"
       },
       "diffusers": {
         "count": 18,
-        "cfmPerDiffuser": 473.6,
+        "cfmPerDiffuser": 472.2,
         "returnCount": 2
       },
       "validationStatus": "NON_COMPLIANT"
@@ -213,28 +213,28 @@
         "peopleLatent": 2000,
         "lightingSensible": 1350,
         "equipmentSensible": 1440,
-        "windowSensible": 3275.944178,
-        "wallSensible": 1076.04,
+        "windowSensible": 3877,
+        "wallSensible": 1575,
         "roofSensible": 0,
         "infiltrationSensible": 952.891178,
         "infiltrationLatent": 1565.237387,
         "freshAirSensible": 2752.032282,
         "freshAirLatent": 4520.541191,
-        "totalSensible": 13446.907637,
+        "totalSensible": 14546.92346,
         "totalLatent": 8085.778579,
-        "totalLoad": 21532.686216,
-        "systemShr": 0.624488,
-        "roomShr": 0.749985
+        "totalLoad": 22632.702038,
+        "systemShr": 0.642739,
+        "roomShr": 0.76789
       },
       "tonnage": {
-        "trDesign": 6.122458,
-        "trCoolingCoil": 6.219335,
-        "trFinal": 6.219335,
+        "trDesign": 6.435229,
+        "trCoolingCoil": 6.53213,
+        "trFinal": 6.53213,
         "trCatalog": 7.5,
         "trCatalogEquipment": 7.5
       },
       "airflow": {
-        "cfmThermal": 1739.001097,
+        "cfmThermal": 1936.289942,
         "cfmVent": 480,
         "cfmAch": 2542.655967,
         "cfmConditioned": 2550,
@@ -245,14 +245,14 @@
         "ach": 9.025995
       },
       "psychro": {
-        "supplyTemp": 16.56,
-        "supplyHumidity": 0.00926,
+        "supplyTemp": 15.8,
+        "supplyHumidity": 0.009257,
         "mixedAirTemp": 25.996899,
         "oaFraction": 0.188235,
-        "coilTotalLoad": 21873.4,
-        "coilSensibleLoad": 13586.2,
-        "adpTemp": 10.01,
-        "bypassFactor": 0.4096
+        "coilTotalLoad": 22973.5,
+        "coilSensibleLoad": 14680.4,
+        "adpTemp": 10.95,
+        "bypassFactor": 0.3225
       },
       "fansAndEsp": {
         "totalEsp": 354,

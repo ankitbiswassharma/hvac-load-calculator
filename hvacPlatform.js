@@ -4535,64 +4535,118 @@
     const solarPoint = solarProfile.point;
     const solarCurve = solarProfile.curve;
     const orientationSeries = solarProfile.orientationSeries;
-    const windowSensible = envelope.windows.reduce(function (sum, windowEntry) {
-      const windowPoint = SolarEngine.hourlySHGF(latitude, dayOfYear, solarHour, windowEntry.orientation, solarOptions);
-      return sum + (windowEntry.area * windowPoint.coolingLoadSolarWm2);
-    }, 0);
 
+    // =====================================================================
+    // ENVELOPE LOADS — ASHRAE sol-air method (Priority #2).
+    //
+    // The main calculator now computes wall/roof/window loads through the
+    // SAME canonical sol-air engine (engineeringCore.ashrae) that powers the
+    // AI designer, replacing the legacy CLTD lookup tables. Because both
+    // surfaces call one engine with the same room+climate mapping, their
+    // envelope numbers are identical by construction — no split-brain.
+    //
+    // A CLTD fallback is retained ONLY for the (rare) case where the shared
+    // engine is unavailable, so an offline calc still returns a number.
+    // =====================================================================
     const wallExposure = envelope.walls.length;
     const externalWallArea = envelope.wallNetArea;
-    const wallCltdBase = CLTD_WALL[Math.min(Math.max(wallExposure, 1), 4)] || CLTD_WALL[2];
     const roofIsExposed = roofExposure !== "ground";
+    const wallCltdBase = CLTD_WALL[Math.min(Math.max(wallExposure, 1), 4)] || CLTD_WALL[2];
     const roofCltdBase = roofIsExposed ? (CLTD_ROOF_MAP[roofExposure] || CLTD_ROOF_MAP.top_floor) : 0;
-    const wallCltdCorrections = envelope.walls.map(function (wallEntry) {
-      return core && typeof core.correctedCltd === "function"
-        ? core.correctedCltd({
-            baseCltd: wallCltdBase,
-            outdoorDryBulb: outdoorDryBulb,
-            indoorDryBulb: indoorDryBulb,
-            solarShgf: solarPoint.shgf,
-            solarAltitudeDeg: solarPoint.altitude,
-            orientationFactor: wallEntry.orientationFactor || 1,
-            surfaceType: "wall"
-          })
-        : {
-            correctedCltd: wallCltdBase,
-            temperatureCorrection: 0,
-            solarCorrection: 0,
-            baseCltd: wallCltdBase
-          };
+
+    const sharedAshraeEngine = (function () {
+      const api = engineeringCoreApi()
+        || (typeof window !== "undefined" && window.EngineeringCore)
+        || (typeof EngineeringCore !== "undefined" ? EngineeringCore : null);
+      return api && api.ashrae ? api.ashrae : null;
+    })();
+    const solairRoom = {
+      name: "solair",
+      areaM2: area, ceilingHeightM: height, occupants: occupants, activity: "seated_office",
+      lpd: lightingLoad, epd: equipmentLoad, equipmentUsage: equipDiversity,
+      walls: (envelope.walls || []).map(function (w) {
+        return { area: w.netArea, U: wallUValue, orientation: w.orientation };
+      }),
+      windows: (envelope.windows || []).map(function (win) {
+        return { area: win.area, U: 3.0, sc: shadingCoefficient, orientation: win.orientation };
+      }),
+      infiltrationAch: 0.5,
+      ventilationCfmPerPerson: freshAirPerPerson, ventilationCfmPerM2: 0,
+      supplyTempC: 13.5, setpointC: indoorDryBulb, setpointRhPct: indoorRelativeHumidity,
+      safetyFactor: 1 + (safetyFactor / 100)
+    };
+    if (roofIsExposed) {
+      solairRoom.roof = { area: envelope.roofLoadArea || envelope.ceilingArea || area, U: roofUValue, alpha: 0.85, dR: 63 };
+    }
+    const solairClimate = {
+      latitudeDeg: latitude, longitudeDeg: 73, stdMeridianDeg: 82.5,
+      designOutdoorDbC: outdoorDryBulb, designOutdoorWbC: outdoorWetBulb,
+      designDayOfYear: dayOfYear, designClockHour: solarHour, elevationM: elevation
+    };
+    let sharedDesign = null;
+    if (sharedAshraeEngine && sharedAshraeEngine.designer) {
+      try { sharedDesign = sharedAshraeEngine.designer.designRoom(solairRoom, solairClimate); }
+      catch (solairError) { sharedDesign = null; }
+    }
+    function sumSolairComponents(prefix) {
+      return (sharedDesign.components || []).reduce(function (sum, c) {
+        return sum + (String(c.kind).indexOf(prefix) === 0 ? (c.sensibleW || 0) : 0);
+      }, 0);
+    }
+    function exactSolairComponent(kind) {
+      return (sharedDesign.components || []).reduce(function (sum, c) {
+        return sum + (c.kind === kind ? (c.sensibleW || 0) : 0);
+      }, 0);
+    }
+
+    let windowSensible, wallSensible, roofSensible, envelopeMethod;
+    if (sharedDesign) {
+      windowSensible = Math.max(0, sumSolairComponents("window_"));
+      wallSensible = Math.max(0, sumSolairComponents("wall_"));
+      roofSensible = Math.max(0, exactSolairComponent("roof"));
+      envelopeMethod = "ashrae_sol_air";
+    } else {
+      // Legacy CLTD fallback (retired as the primary path; offline safety only).
+      windowSensible = envelope.windows.reduce(function (sum, windowEntry) {
+        const windowPoint = SolarEngine.hourlySHGF(latitude, dayOfYear, solarHour, windowEntry.orientation, solarOptions);
+        return sum + (windowEntry.area * windowPoint.coolingLoadSolarWm2);
+      }, 0);
+      const wallFallback = envelope.walls.map(function (wallEntry) {
+        return (core && typeof core.correctedCltd === "function")
+          ? core.correctedCltd({ baseCltd: wallCltdBase, outdoorDryBulb: outdoorDryBulb, indoorDryBulb: indoorDryBulb,
+              solarShgf: solarPoint.shgf, solarAltitudeDeg: solarPoint.altitude,
+              orientationFactor: wallEntry.orientationFactor || 1, surfaceType: "wall" })
+          : { correctedCltd: wallCltdBase };
+      });
+      wallSensible = Math.max(0, envelope.walls.reduce(function (sum, wallEntry, index) {
+        const c = wallFallback[index] || { correctedCltd: wallCltdBase };
+        return sum + (wallUValue * wallEntry.netArea * (c.correctedCltd || wallCltdBase) * (wallEntry.orientationFactor || 1));
+      }, 0));
+      const roofCorr = (roofIsExposed && core && typeof core.correctedCltd === "function")
+        ? core.correctedCltd({ baseCltd: roofCltdBase, outdoorDryBulb: outdoorDryBulb, indoorDryBulb: indoorDryBulb,
+            solarShgf: solarPoint.shgf, solarAltitudeDeg: solarPoint.altitude, orientationFactor: 1.08, surfaceType: "roof" })
+        : { correctedCltd: roofCltdBase };
+      roofSensible = roofIsExposed ? Math.max(0, roofUValue * envelope.ceilingArea * (roofCorr.correctedCltd || roofCltdBase)) : 0;
+      envelopeMethod = "legacy_cltd_fallback";
+    }
+
+    // Effective sol-air ΔT per surface (load = U·A·ΔT_eff), used for the
+    // load-breakdown display so the report explains the sol-air result.
+    const wallUAtotal = wallUValue * (externalWallArea || 0);
+    const roofUAtotal = roofUValue * (roofIsExposed ? (envelope.roofLoadArea || envelope.ceilingArea || 0) : 0);
+    const wallCltd = wallUAtotal > 0 ? wallSensible / wallUAtotal : wallCltdBase;
+    const wallCltdCorrections = envelope.walls.map(function () {
+      return { baseCltd: wallCltdBase, correctedCltd: wallCltd, temperatureCorrection: 0, solarCorrection: 0, method: envelopeMethod };
     });
-    const wallCltd = wallCltdCorrections.length
-      ? wallCltdCorrections.reduce(function (sum, entry) { return sum + (entry.correctedCltd || wallCltdBase); }, 0) / wallCltdCorrections.length
-      : wallCltdBase;
-    const roofCltdCorrection = roofIsExposed && core && typeof core.correctedCltd === "function"
-      ? core.correctedCltd({
-          baseCltd: roofCltdBase,
-          outdoorDryBulb: outdoorDryBulb,
-          indoorDryBulb: indoorDryBulb,
-          solarShgf: solarPoint.shgf,
-          solarAltitudeDeg: solarPoint.altitude,
-          orientationFactor: 1.08,
-          surfaceType: "roof"
-        })
-      : {
-          correctedCltd: roofCltdBase,
-          temperatureCorrection: 0,
-          solarCorrection: 0,
-          baseCltd: roofCltdBase
-        };
-    const wallSensible = Math.max(0, envelope.walls.reduce(function (sum, wallEntry, index) {
-      const wallCltdEntry = wallCltdCorrections[index] || { correctedCltd: wallCltdBase };
-      return sum + (wallUValue * wallEntry.netArea * (wallCltdEntry.correctedCltd || wallCltdBase) * (wallEntry.orientationFactor || 1));
-    }, 0));
-    const roofSensible = roofIsExposed
-      ? Math.max(0, roofUValue * envelope.ceilingArea * (roofCltdCorrection.correctedCltd || roofCltdBase))
-      : 0;
+    const roofCltdCorrection = {
+      baseCltd: roofCltdBase,
+      correctedCltd: roofUAtotal > 0 ? roofSensible / roofUAtotal : roofCltdBase,
+      temperatureCorrection: 0, solarCorrection: 0, method: envelopeMethod
+    };
     const floorLoadType = roofExposure === "ground" ? "slab_on_grade" : "internal_floor";
     const floorAssumption = floorLoadType === "slab_on_grade"
-      ? "Slab-on-grade floor conduction is limited in cooling mode and is not treated with roof CLTD."
-      : "Internal floor is assumed adjacent to conditioned or buffered space; no roof CLTD is applied.";
+      ? "Slab-on-grade floor conduction is limited in cooling mode and is not treated as an exposed roof surface."
+      : "Internal floor is assumed adjacent to conditioned or buffered space; no exposed-roof solar load is applied.";
     const floorSensible = 0;
     const roofLoadType = roofIsExposed ? "exposed_roof_or_ceiling" : "not_exposed_roof";
 
@@ -5268,8 +5322,8 @@
       .concat(roomPsychro && roomPsychro.assumptions ? roomPsychro.assumptions : [])
       .concat(airflowStreams.notes || [])
       .concat([
-        "Wall CLTD base " + formatNumber(wallCltdBase, 1) + " corrected to about " + formatNumber(wallCltd, 1) + " with outdoor dry-bulb and solar adjustment.",
-        "Roof CLTD base " + formatNumber(roofCltdBase, 1) + " corrected to about " + formatNumber(roofCltdCorrection.correctedCltd || roofCltdBase, 1) + ".",
+        "Wall envelope load uses the ASHRAE sol-air method (orientation-resolved), giving an effective sol-air ΔT of about " + formatNumber(wallCltd, 1) + " K at the design-day peak hour.",
+        "Roof envelope load uses the ASHRAE sol-air method, giving an effective sol-air ΔT of about " + formatNumber(roofCltdCorrection.correctedCltd || roofCltdBase, 1) + " K.",
         "Pressure loss uses Darcy-Weisbach friction plus fitting K-factors when the engineering core is active.",
         "Annual energy uses the Python bin-method model with part-load COP and fan cube-law behavior."
       ]);
@@ -5408,6 +5462,7 @@
       wallSensible: wallSensible,
       roofSensible: roofSensible,
       floorSensible: floorSensible,
+      envelopeMethod: envelopeMethod,
       cltdContext: {
         wallBase: wallCltdBase,
         wallCorrected: roundTo(wallCltd, 1),
@@ -5811,6 +5866,49 @@
 
 	    ensureFinalizedResult(result, { promoteEnergySimulation: false });
 
+    // ---------------------------------------------------------------------
+    // Single-engine cross-check. The envelope loads above were computed by
+    // the shared ASHRAE sol-air engine (engineeringCore.ashrae) — the SAME
+    // engine used by the AI endpoints. We reuse that one `sharedDesign`
+    // result here (no second computation) to report how the shared designer's
+    // whole-room sizing compares with the full UI pipeline. After Priority #2
+    // the envelope portion is identical by construction; any residual gap is
+    // air-side/internal-gain modeling, not envelope method.
+    // ---------------------------------------------------------------------
+    try {
+      if (sharedDesign) {
+        const uiTR = Number(result.tr_design) || 0;
+        result.ashraeDesignerCrossCheck = {
+          engine: "engineeringCore.ashrae (ASHRAE sol-air, v" + ((sharedAshraeEngine && sharedAshraeEngine.version) || "1.0.0") + ")",
+          envelopeMethod: envelopeMethod,
+          designTR: sharedDesign.designTR,
+          selectedTR: sharedDesign.selectedTR,
+          sensibleW: sharedDesign.roomLoad.sensibleW,
+          latentW: sharedDesign.roomLoad.latentW,
+          totalW: sharedDesign.roomLoad.totalW,
+          shr: sharedDesign.roomLoad.shr,
+          supplyCfm: sharedDesign.supplyAir.cfm,
+          envelopeSensibleW: Math.round(windowSensible + wallSensible + roofSensible),
+          peakHour: sharedDesign.peakHour,
+          coil: sharedDesign.coil || null,
+          equipmentSelection: (sharedAshraeEngine.equipment && sharedAshraeEngine.equipment.selectEquipment)
+            ? sharedAshraeEngine.equipment.selectEquipment({
+                requiredTR: sharedDesign.designTR,
+                outdoorTempC: outdoorDryBulb,
+                systemType: (inputs.system_type || "vrf")
+              })
+            : null,
+          uiDesignTR: roundTo(uiTR, 2),
+          divergencePctVsUi: uiTR > 0 ? roundTo(100 * (sharedDesign.designTR - uiTR) / uiTR, 1) : null,
+          note: "Envelope uses the shared sol-air engine at the swept peak hour; equipment is de-rated at the design outdoor temperature and the coil ADP/BF validates the room SHR."
+        };
+      } else {
+        result.ashraeDesignerCrossCheck = { engine: "unavailable", envelopeMethod: envelopeMethod, note: "Shared engine unavailable; envelope used legacy CLTD fallback." };
+      }
+    } catch (crossCheckError) {
+      result.ashraeDesignerCrossCheck = { error: String((crossCheckError && crossCheckError.message) || crossCheckError) };
+    }
+
 	    if (!calculationOptions.skipAiEnhancements) {
 	      result.designAdvisor = normalizeAdvisoryRegistry(buildLocalDesignAdvisor(result), result);
       result.designOptimization = null;
@@ -5852,10 +5950,10 @@
       + '<tr><td>Equipment</td><td>A × W/m² × diversity ' + formatNumber(parseFloat(result.inputs.div_equip) || 0.80, 2) + '</td><td>' + formatNumber(result.area, 1) + " m²</td><td>" + result.inputs.equip + ' W/m²</td><td class="num">' + formatInt(result.equipmentSensible) + '</td><td class="num">-</td></tr>'
       + '<tr><td>Window solar</td><td>Σ(A_window x incident solar on glass x SHGC/SC x CLF)</td><td>' + formatNumber(envelope.windowAreaTotal, 2) + " m2</td><td>" + escapeHtml(result.solar.activeOrientationLabel || orientationLabel(result.inputs.win_orient)) + " · incident=" + Math.round(result.solar.point.incidentSolarOnGlassWm2 || 0) + " W/m2, effective load=" + Math.round(result.solar.point.coolingLoadSolarWm2 || result.solar.point.shgf || 0) + " W/m2, SC/SHGC=" + result.inputs.sc_glass + ", CLF=" + result.inputs.clf_shade + '</td><td class="num">' + formatInt(result.windowSensible) + '</td><td class="num">-</td></tr>'
       + windowBreakdownRows
-      + '<tr><td>Wall conduction</td><td>Σ(U x A_net x corrected CLTD x orientation factor)</td><td>' + formatNumber(envelope.wallNetArea, 2) + " m2</td><td>U=" + result.inputs.u_wall + ", CLTD(base)=" + formatNumber(result.cltdContext && result.cltdContext.wallBase || (CLTD_WALL[Math.min(Math.max((envelope.walls || []).length, 1), 4)] || 0), 1) + ', corrected≈' + formatNumber(result.cltdContext && result.cltdContext.wallCorrected || 0, 1) + '</td><td class="num">' + formatInt(result.wallSensible) + '</td><td class="num">-</td></tr>'
+      + '<tr><td>Wall conduction</td><td>Σ(U x A_net x (T_sol-air − T_in)) — ASHRAE sol-air</td><td>' + formatNumber(envelope.wallNetArea, 2) + " m2</td><td>U=" + result.inputs.u_wall + ", effective sol-air ΔT≈" + formatNumber(result.cltdContext && result.cltdContext.wallCorrected || 0, 1) + ' K</td><td class="num">' + formatInt(result.wallSensible) + '</td><td class="num">-</td></tr>'
       + wallBreakdownRows
-      + '<tr><td>Roof conduction</td><td>U x exposed roof area x corrected roof CLTD</td><td>' + formatNumber(envelope.roofLoadArea, 2) + " m2</td><td>Type=" + escapeHtml(result.cltdContext && result.cltdContext.roofLoadType || "exposed_roof") + ", CLTD(base)=" + formatNumber(result.cltdContext && result.cltdContext.roofBase || 0, 1) + ', corrected≈' + formatNumber(result.cltdContext && result.cltdContext.roofCorrection && result.cltdContext.roofCorrection.correctedCltd || 0, 1) + '</td><td class="num">' + formatInt(result.roofSensible) + '</td><td class="num">-</td></tr>'
-      + '<tr><td>Floor / slab conduction</td><td>Separated from roof CLTD</td><td>' + formatNumber(envelope.floorArea, 2) + " m2</td><td>" + escapeHtml(result.cltdContext && result.cltdContext.floorAssumption || "Internal floor assumed buffered; roof CLTD not applied.") + '</td><td class="num">' + formatInt(result.floorSensible || 0) + '</td><td class="num">-</td></tr>'
+      + '<tr><td>Roof conduction</td><td>U x exposed roof area x (T_sol-air − T_in) — ASHRAE sol-air</td><td>' + formatNumber(envelope.roofLoadArea, 2) + " m2</td><td>Type=" + escapeHtml(result.cltdContext && result.cltdContext.roofLoadType || "exposed_roof") + ", effective sol-air ΔT≈" + formatNumber(result.cltdContext && result.cltdContext.roofCorrection && result.cltdContext.roofCorrection.correctedCltd || 0, 1) + ' K</td><td class="num">' + formatInt(result.roofSensible) + '</td><td class="num">-</td></tr>'
+      + '<tr><td>Floor / slab conduction</td><td>Treated separately from the exposed roof</td><td>' + formatNumber(envelope.floorArea, 2) + " m2</td><td>" + escapeHtml(result.cltdContext && result.cltdContext.floorAssumption || "Internal floor assumed buffered; no exposed-roof solar load applied.") + '</td><td class="num">' + formatInt(result.floorSensible || 0) + '</td><td class="num">-</td></tr>'
       + '<tr><td>Infiltration - sensible</td><td>m_dot infil x c_p x dT</td><td>' + formatInt(result.infiltration_cfm || 0) + " CFM</td><td>" + formatNumber(result.infiltration_ach || 0, 2) + ' ACH allowance</td><td class="num">' + formatInt(result.infiltrationSensible || 0) + '</td><td class="num">-</td></tr>'
       + '<tr><td>Infiltration - latent</td><td>Infiltration total - sensible</td><td>-</td><td>Outdoor moisture load entering the space</td><td class="num">-</td><td class="num">' + formatInt(result.infiltrationLatent || 0) + "</td></tr>"
       + '<tr><td>Fresh air - sensible</td><td>m_dot OA x c_p x dT</td><td>' + formatInt(result.fresh_total_cfm) + " CFM</td><td>dT=" + formatNumber((parseFloat(result.inputs.out_dbt) || 0) - (parseFloat(result.inputs.in_dbt) || 0), 1) + ' C</td><td class="num">' + formatInt(result.freshAirSensible) + '</td><td class="num">-</td></tr>'
@@ -6975,6 +7073,7 @@
       ["02", "Cooling load"],
       ["03", "SHR"],
       ["04", "Tonnage"],
+      ["04A", "Equipment selection (shared engine)"],
       ["05", "Airflow"],
       ["06", "Duct sizing"],
       ["07", "ESP"],
@@ -7029,7 +7128,7 @@
       + '<div class="report-kv">'
       + "<dt>Report date / time</dt><dd>" + escapeHtml(reportDate.toLocaleString()) + "</dd>"
       + "<dt>Prepared by</dt><dd>Ankit Biswas Sharma</dd>"
-      + "<dt>Calculation method</dt><dd>ASHRAE CLTD / effective solar cooling load / psychrometric process</dd>"
+      + "<dt>Calculation method</dt><dd>ASHRAE sol-air envelope · clear-sky solar · psychrometric process · design-day peak sweep</dd>"
       + "<dt>Prepared for</dt><dd>Musk-IT design issue / PDF package</dd>"
       + "<dt>Indoor design</dt><dd>" + escapeHtml(result.inputs.in_dbt + " deg C / " + result.inputs.in_rh + "% RH") + "</dd>"
       + "</div>"
@@ -7134,6 +7233,70 @@
   // live #ai-engine-result DOM element, or builds a rich fallback from
   // the current finalized calculation result so the section is never blank.
   // -------------------------------------------------------------------
+  function buildSharedEngineSelectionMarkup(result) {
+    const cc = result && result.ashraeDesignerCrossCheck;
+    if (!cc || cc.error || !cc.engine || cc.engine === "unavailable") {
+      return '<div class="report-inline-note">Shared-engine selection not available for this calculation.</div>';
+    }
+    function rn(v, d) { const f = Math.pow(10, d || 0); return Math.round((Number(v) || 0) * f) / f; }
+    const eqSel = cc.equipmentSelection;
+
+    // Equipment selection + design-day peak hour only. The coil apparatus dew
+    // point / bypass factor is reported once, in the Psychrometric section (10),
+    // to avoid printing coil numbers twice.
+    const cards = '<div class="report-summary-grid">'
+      + reportSummaryCard("Design peak hour",
+          (cc.peakHour != null ? (cc.peakHour + ":00") : "—"),
+          "Swept 06:00–20:00 · true orientation peak")
+      + (eqSel
+          ? reportSummaryCard("Selected cooling unit", escapeHtml(String(eqSel.model)),
+              "Corrected " + rn(eqSel.correctedTR, 2) + " TR at design outdoor · "
+              + rn((1 - (eqSel.deratingFactor || 1)) * 100, 1) + "% de-rate")
+          : "")
+      + (eqSel
+          ? reportSummaryCard("Capacity margin", rn(eqSel.oversizePct, 1) + "%",
+              "Nominal " + rn(eqSel.nominalTR, 1) + " TR · rated COP " + rn(eqSel.ratedCop, 2))
+          : "")
+      + '</div>';
+
+    const eqNote = eqSel
+      ? '<div class="report-inline-note"><b>Equipment basis:</b> catalog cooling unit selected on '
+        + '<b>de-rated</b> capacity at the design outdoor dry-bulb (not nameplate). '
+        + escapeHtml(String(eqSel.model)) + ' delivers ' + rn(eqSel.correctedTR, 2) + ' TR of its '
+        + rn(eqSel.nominalTR, 1) + ' TR nominal (' + rn((eqSel.deratingFactor || 1), 3) + ' de-rating factor), '
+        + 'covering the ' + rn(cc.designTR, 2) + ' TR shared-engine load with '
+        + rn(eqSel.oversizePct, 1) + '% margin. This is the packaged cooling unit; the air-handling '
+        + 'unit (AHU) selection is in the Multi-Room section.</div>'
+      : "";
+
+    return cards + eqNote
+      + '<div class="report-inline-note" style="background:#eff6ff;border-left-color:#3b82f6;color:#1e3a8a;">'
+      + 'Source: <b>' + escapeHtml(String(cc.engine)) + '</b> · envelope method '
+      + escapeHtml(String(cc.envelopeMethod || "ashrae_sol_air")) + '. Same shared engine as the AI design path.</div>';
+  }
+
+  // Coil apparatus dew point / bypass-factor FEASIBILITY verdict from the shared
+  // engine. Rendered once, alongside the detailed coil psychrometrics (section 10).
+  function buildCoilFeasibilityNote(result) {
+    const cc = result && result.ashraeDesignerCrossCheck;
+    const coil = cc && !cc.error ? cc.coil : null;
+    if (!coil) return "";
+    function rn(v, d) { const f = Math.pow(10, d || 0); return Math.round((Number(v) || 0) * f) / f; }
+    return '<div class="report-inline-note" style="'
+      + (coil.achievable
+          ? 'background:#f0fdf4;border-left-color:#16a34a;color:#166534;'
+          : 'background:#fef2f2;border-left-color:#dc2626;color:#991b1b;')
+      + '"><b>Coil feasibility (shared engine):</b> '
+      + (coil.achievable
+          ? 'ACHIEVABLE — apparatus dew point ' + rn(coil.adpC, 1) + ' °C, bypass factor '
+            + rn(coil.bypassFactor, 3) + ', meets the room SHR of ' + rn(coil.shr, 2) + ' at a '
+            + rn(coil.supplyTempC, 1) + ' °C supply condition.'
+          : 'REVIEW — the required room SHR of ' + rn(coil.shr, 2) + ' drives the apparatus dew point below the '
+            + 'practical coil limit. This zone needs reheat, a lower supply-air temperature, or dedicated '
+            + 'dehumidification rather than a single standard coil.')
+      + '</div>';
+  }
+
   function buildAshraeDesignReportMarkup(result) {
     const wrap = (typeof window !== "undefined") ? window : {};
     // Also stash _lastCalcResult so the fallback can always find it
@@ -7168,7 +7331,7 @@
       return '<div class="report-inline-note" style="background:#eff6ff;border-left-color:#3b82f6;color:#1e3a8a;">'
         + '<b>Engine design not generated for this session.</b> Open the <b>AI Design Studio</b> panel and click '
         + '<b>Generate full design</b> before printing to capture the engine/ashrae full-sized design here. '
-        + 'The finalized ASHRAE CLTD calculation for this room is documented in sections 01–10 of this report.'
+        + 'The finalized ASHRAE sol-air calculation for this room is documented in sections 01–10 of this report.'
         + '</div>';
     }
     const design = payload.design;
@@ -7195,14 +7358,29 @@
             "Applied to load only — airflow is not discounted")
       +   reportSummaryCard("External SP", formatInt(fan.externalSpPa || 0) + " Pa",
             roundNum(fan.fanEfficiency || 0.65, 2) + " fan η")
+      +   (design.equipmentSelection
+            ? reportSummaryCard("Selected equipment", escapeHtml(String(design.equipmentSelection.model)),
+                "Corrected " + roundNum(design.equipmentSelection.correctedTR, 2) + " TR · "
+                + roundNum((1 - (design.equipmentSelection.deratingFactor || 1)) * 100, 1) + "% de-rate at design outdoor")
+            : "")
+      +   (design.coil
+            ? reportSummaryCard("System coil ADP", roundNum(design.coil.designAdpC, 1) + " °C",
+                "Max BF " + roundNum(design.coil.maxBypassFactor, 3) + " · "
+                + (design.coil.allZonesAchievable ? "all zones achievable" : "REVIEW: a zone SHR is infeasible"))
+            : "")
+      +   (a.blockPeakHour != null
+            ? reportSummaryCard("Block peak hour", a.blockPeakHour + ":00",
+                "Coincidence " + roundNum(a.coincidenceFactor || 1, 3) + " · swept design day")
+            : "")
       +   reportSummaryCard("Engine version", "v" + (design.engineVersion || "?"),
-            "engine/ashrae · ASHRAE HOF psychrometrics")
+            "engineeringCore.ashrae · ASHRAE HOF psychrometrics")
       + '</div>';
 
     // Room rollup table
     const roomRows = rooms.map(function (r) {
       const rl = r.roomLoad || {};
       const sa = r.supplyAir || {};
+      const rc = r.coil || {};
       return '<tr>'
         + '<td>' + escapeHtml(r.room || "Room") + '</td>'
         + '<td class="num">' + formatInt(rl.sensibleW || 0) + '</td>'
@@ -7210,6 +7388,10 @@
         + '<td class="num">' + formatInt(rl.totalW || 0) + '</td>'
         + '<td class="num">' + roundNum(rl.shr || 0, 2) + '</td>'
         + '<td class="num">' + formatInt(sa.cfm || 0) + '</td>'
+        + '<td class="num">' + (r.peakHour != null ? (r.peakHour + ":00") : "—") + '</td>'
+        + '<td class="num">' + (rc.adpC != null ? roundNum(rc.adpC, 1) : "—") + '</td>'
+        + '<td class="num">' + (rc.bypassFactor != null ? roundNum(rc.bypassFactor, 3) : "—")
+            + (rc.achievable === false ? ' ⚠' : '') + '</td>'
         + '<td class="num">' + roundNum(r.designTR || 0, 2) + '</td>'
         + '<td class="num">' + (r.selectedTR || 0) + '</td>'
         + '</tr>';
@@ -7219,9 +7401,9 @@
       + '<table style="width:100%;border-collapse:collapse;">'
       + '<thead><tr>'
       +   '<th>Room</th><th>Sens. W</th><th>Lat. W</th><th>Total W</th>'
-      +   '<th>SHR</th><th>CFM</th><th>Design TR</th><th>Sel. TR</th>'
+      +   '<th>SHR</th><th>CFM</th><th>Peak hr</th><th>Coil ADP °C</th><th>BF</th><th>Design TR</th><th>Sel. TR</th>'
       + '</tr></thead>'
-      + '<tbody>' + (roomRows || '<tr><td colspan="8">No rooms in design.</td></tr>') + '</tbody>'
+      + '<tbody>' + (roomRows || '<tr><td colspan="11">No rooms in design.</td></tr>') + '</tbody>'
       + '</table>';
 
     // Components for first room (assumed representative)
@@ -8627,6 +8809,9 @@
       )
       + reportBlock("03 · SHR", innerHtml("shr-content"))
       + reportBlock("04 · TONNAGE", innerHtml("tonnage-detail"))
+      + reportBlock("04A · EQUIPMENT SELECTION (SHARED ENGINE)",
+        buildSharedEngineSelectionMarkup(result)
+      )
       + reportBlock("05 · AIRFLOW", innerHtml("airflow-detail"))
       + reportBlock("06 · DUCT SIZING", outerHtml("duct-cards") + '<div class="table-wrap">' + outerHtml("duct-table") + "</div>")
       + reportBlock("07 · ESP", innerHtml("esp-table-wrap"))
@@ -8639,6 +8824,7 @@
         '<div class="report-subtitle">Outdoor State</div>' + outerHtml("psychro-outdoor")
         + '<div class="report-subtitle">Indoor State</div>' + outerHtml("psychro-indoor")
         + '<div class="report-subtitle">Coil Analysis</div>' + innerHtml("coil-detail")
+        + buildCoilFeasibilityNote(result)
       )
       + reportBlock("10A · DESIGN VALIDATION",
         buildValidationReportMarkup(result)
@@ -11185,6 +11371,9 @@
     normalizeEnergyReportForFinalDesign: normalizeEnergyReportForFinalDesign,
     renderEnergy: renderEnergy,
     renderReport: renderReport,
+    buildSharedEngineSelectionMarkup: buildSharedEngineSelectionMarkup,
+    buildCoilFeasibilityNote: buildCoilFeasibilityNote,
+    buildAshraeDesignReportMarkup: buildAshraeDesignReportMarkup,
     airflowBreakdown: airflowBreakdown,
     renderProjectSummary: renderProjectSummary
   };

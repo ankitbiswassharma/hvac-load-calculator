@@ -2987,7 +2987,1037 @@
     };
   }
 
+  // =====================================================================
+  // Canonical ASHRAE sol-air design engine (single source of truth).
+  //
+  // This block is the ONE implementation of the rigorous psychrometric /
+  // solar / sol-air load / sizing / full-design stack. It is verbatim-
+  // faithful to the former engine/ashrae/* modules (which now re-export
+  // from here), so both the browser UI and the Node AI endpoints run the
+  // exact same code. Pinned by tests/golden/goldenValues.json.
+  //
+  // Wrapped in its own IIFE so its internal names never collide with the
+  // engineeringCore UI engine above.
+  // =====================================================================
+  const ashrae = (function () {
+    "use strict";
+    function clamp(x, lo, hi) { return Math.min(hi, Math.max(lo, x)); }
+
+    /* ---------------- Psychrometrics (ASHRAE Ch.1) ---------------- */
+    const R_DA = 287.042;
+    const R_W = 461.524;
+    const MW_RATIO = 0.621945;
+    const ATM_PA = 101325;
+    const T_ZERO_K = 273.15;
+
+    function pressureAtElevation(elevationM) {
+      const z = Math.max(0, elevationM || 0);
+      return ATM_PA * Math.pow(1 - 2.25577e-5 * z, 5.25588);
+    }
+    function saturationPressurePa(tempC) {
+      const T = (tempC || 0) + T_ZERO_K;
+      if (tempC < 0) {
+        const c = [-5.6745359e3, 6.3925247, -9.677843e-3, 6.2215701e-7, 2.0747825e-9, -9.484024e-13, 4.1635019];
+        const ln = c[0]/T + c[1] + c[2]*T + c[3]*T*T + c[4]*T*T*T + c[5]*T*T*T*T + c[6]*Math.log(T);
+        return Math.exp(ln);
+      }
+      const c = [-5.8002206e3, 1.3914993, -4.8640239e-2, 4.1764768e-5, -1.4452093e-8, 6.5459673];
+      const ln = c[0]/T + c[1] + c[2]*T + c[3]*T*T + c[4]*T*T*T + c[5]*Math.log(T);
+      return Math.exp(ln);
+    }
+    function humidityRatioFromPw(pwPa, totalPressurePa) {
+      const P = totalPressurePa || ATM_PA;
+      const pw = clamp(pwPa, 0, P - 1);
+      return MW_RATIO * pw / Math.max(P - pw, 1);
+    }
+    function humidityRatioAt(tempC, relativeHumidityPct, pressurePa) {
+      const rh = clamp((relativeHumidityPct || 0) / 100, 0, 1);
+      const pws = saturationPressurePa(tempC);
+      return humidityRatioFromPw(rh * pws, pressurePa);
+    }
+    function saturationHumidityRatio(tempC, pressurePa) {
+      return humidityRatioAt(tempC, 100, pressurePa);
+    }
+    function vaporPressureFromW(W, pressurePa) {
+      const P = pressurePa || ATM_PA;
+      const w = Math.max(W, 0);
+      return P * w / (MW_RATIO + w);
+    }
+    function relativeHumidity(tempC, W, pressurePa) {
+      const pw = vaporPressureFromW(W, pressurePa);
+      const pws = saturationPressurePa(tempC);
+      if (pws <= 0) return 0;
+      return clamp(100 * pw / pws, 0, 100);
+    }
+    function moistAirEnthalpy(tempC, W) {
+      return 1.006 * tempC + Math.max(W, 0) * (2501 + 1.86 * tempC);
+    }
+    function humidityRatioFromEnthalpyTemp(h, tempC) {
+      const denom = 2501 + 1.86 * tempC;
+      return denom !== 0 ? (h - 1.006 * tempC) / denom : 0;
+    }
+    function moistAirSpecificVolume(tempC, W, pressurePa) {
+      const P = pressurePa || ATM_PA;
+      return R_DA * (tempC + T_ZERO_K) * (1 + 1.607858 * Math.max(W, 0)) / P;
+    }
+    function moistAirDensity(tempC, W, pressurePa) {
+      const v = moistAirSpecificVolume(tempC, W, pressurePa);
+      return (1 + Math.max(W, 0)) / v;
+    }
+    function cpMoistAir(W) {
+      return 1.006 + 1.86 * Math.max(W, 0);
+    }
+    function dewPointTemp(W, pressurePa) {
+      const P = pressurePa || ATM_PA;
+      const w = Math.max(W, 1e-9);
+      const pw = vaporPressureFromW(w, P);
+      let lo = -90, hi = 100;
+      for (let i = 0; i < 80; i++) {
+        const mid = (lo + hi) / 2;
+        if (saturationPressurePa(mid) < pw) lo = mid; else hi = mid;
+        if (hi - lo < 1e-4) break;
+      }
+      return (lo + hi) / 2;
+    }
+    function wetBulbTemp(tempC, W, pressurePa) {
+      const P = pressurePa || ATM_PA;
+      const w = Math.max(W, 0);
+      let lo = -50, hi = tempC;
+      function wAtTwb(twb) {
+        const Wws = saturationHumidityRatio(twb, P);
+        if (twb >= 0) {
+          return ((2501 - 2.326 * twb) * Wws - 1.006 * (tempC - twb))
+            / (2501 + 1.86 * tempC - 4.186 * twb);
+        }
+        return ((2830 - 0.24 * twb) * Wws - 1.006 * (tempC - twb))
+          / (2830 + 1.86 * tempC - 2.1 * twb);
+      }
+      for (let i = 0; i < 80; i++) {
+        const mid = (lo + hi) / 2;
+        const wmid = wAtTwb(mid);
+        if (wmid < w) lo = mid; else hi = mid;
+        if (hi - lo < 1e-4) break;
+      }
+      return (lo + hi) / 2;
+    }
+    function stateFromDryBulbRH(tempC, rhPct, pressurePa) {
+      const P = pressurePa || ATM_PA;
+      const W = humidityRatioAt(tempC, rhPct, P);
+      return {
+        tempC: tempC, rhPct: rhPct, humidityRatio: W,
+        enthalpy: moistAirEnthalpy(tempC, W),
+        specificVolume: moistAirSpecificVolume(tempC, W, P),
+        density: moistAirDensity(tempC, W, P),
+        dewPoint: dewPointTemp(W, P),
+        wetBulb: wetBulbTemp(tempC, W, P),
+        pressurePa: P
+      };
+    }
+    const psy = {
+      R_DA: R_DA, R_W: R_W, MW_RATIO: MW_RATIO, ATM_PA: ATM_PA,
+      pressureAtElevation: pressureAtElevation,
+      saturationPressurePa: saturationPressurePa,
+      humidityRatioFromPw: humidityRatioFromPw,
+      humidityRatioAt: humidityRatioAt,
+      saturationHumidityRatio: saturationHumidityRatio,
+      vaporPressureFromW: vaporPressureFromW,
+      relativeHumidity: relativeHumidity,
+      moistAirEnthalpy: moistAirEnthalpy,
+      humidityRatioFromEnthalpyTemp: humidityRatioFromEnthalpyTemp,
+      moistAirSpecificVolume: moistAirSpecificVolume,
+      moistAirDensity: moistAirDensity,
+      cpMoistAir: cpMoistAir,
+      dewPointTemp: dewPointTemp,
+      wetBulbTemp: wetBulbTemp,
+      stateFromDryBulbRH: stateFromDryBulbRH
+    };
+
+    /* ---------------- Solar (ASHRAE Ch.14/15) ---------------- */
+    const DEG = Math.PI / 180;
+    const RAD = 180 / Math.PI;
+    const ASHRAE_CLEAR_SKY_AB = [
+      { A: 1230, B: 0.142, C: 0.058 }, { A: 1215, B: 0.144, C: 0.060 },
+      { A: 1186, B: 0.156, C: 0.071 }, { A: 1136, B: 0.180, C: 0.097 },
+      { A: 1104, B: 0.196, C: 0.121 }, { A: 1088, B: 0.205, C: 0.134 },
+      { A: 1085, B: 0.207, C: 0.136 }, { A: 1107, B: 0.201, C: 0.122 },
+      { A: 1152, B: 0.177, C: 0.092 }, { A: 1193, B: 0.160, C: 0.073 },
+      { A: 1221, B: 0.149, C: 0.063 }, { A: 1234, B: 0.142, C: 0.057 }
+    ];
+    function dayOfYearToMonth(N) {
+      const cum = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
+      for (let m = 0; m < 12; m++) { if (N <= cum[m + 1]) return m; }
+      return 11;
+    }
+    function declinationDeg(dayOfYear) {
+      const gamma = 2 * Math.PI * (dayOfYear - 1) / 365;
+      const d = 0.006918 - 0.399912 * Math.cos(gamma) + 0.070257 * Math.sin(gamma)
+        - 0.006758 * Math.cos(2 * gamma) + 0.000907 * Math.sin(2 * gamma)
+        - 0.002697 * Math.cos(3 * gamma) + 0.001480 * Math.sin(3 * gamma);
+      return d * RAD;
+    }
+    function equationOfTimeMin(dayOfYear) {
+      const gamma = 2 * Math.PI * (dayOfYear - 1) / 365;
+      return 229.18 * (0.000075 + 0.001868 * Math.cos(gamma) - 0.032077 * Math.sin(gamma)
+        - 0.014615 * Math.cos(2 * gamma) - 0.040849 * Math.sin(2 * gamma));
+    }
+    function apparentSolarTime(clockHourLocal, dayOfYear, longitudeDeg, stdMeridianDeg) {
+      const eot = equationOfTimeMin(dayOfYear);
+      return clockHourLocal + eot / 60 + (longitudeDeg - stdMeridianDeg) / 15;
+    }
+    function hourAngleDeg(apparentSolarHour) { return 15 * (apparentSolarHour - 12); }
+    function solarPosition(latitudeDeg, dayOfYear, apparentSolarHour) {
+      const L = latitudeDeg * DEG;
+      const d = declinationDeg(dayOfYear) * DEG;
+      const H = hourAngleDeg(apparentSolarHour) * DEG;
+      const sinBeta = Math.sin(L) * Math.sin(d) + Math.cos(L) * Math.cos(d) * Math.cos(H);
+      const beta = Math.asin(clamp(sinBeta, -1, 1));
+      const azS = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(L) - Math.tan(d) * Math.cos(L));
+      let azimuthCompass = 180 + azS * RAD;
+      if (azimuthCompass < 0) azimuthCompass += 360;
+      if (azimuthCompass >= 360) azimuthCompass -= 360;
+      return { altitudeDeg: beta * RAD, azimuthDeg: azimuthCompass, altitudeRad: beta, isAboveHorizon: beta > 0 };
+    }
+    function cosIncidenceAngle(tiltDeg, surfaceAzimuthDeg, position) {
+      if (!position.isAboveHorizon) return 0;
+      const Sigma = tiltDeg * DEG;
+      const surfAz = surfaceAzimuthDeg * DEG;
+      const sunAz = position.azimuthDeg * DEG;
+      const beta = position.altitudeRad;
+      const gamma = sunAz - surfAz;
+      const cosTheta = Math.cos(beta) * Math.cos(gamma) * Math.sin(Sigma) + Math.sin(beta) * Math.cos(Sigma);
+      return Math.max(0, cosTheta);
+    }
+    function relativeAirMass(altitudeDeg) {
+      if (altitudeDeg <= 0) return 0;
+      const z = (90 - altitudeDeg);
+      return 1 / (Math.sin(altitudeDeg * DEG) + 0.50572 * Math.pow(96.07995 - z, -1.6364));
+    }
+    function clearSkyIrradiance(dayOfYear, altitudeDeg) {
+      if (altitudeDeg <= 0) return { dni: 0, diffuseHoriz: 0, beamHoriz: 0 };
+      const m = dayOfYearToMonth(dayOfYear);
+      const A = ASHRAE_CLEAR_SKY_AB[m].A, B = ASHRAE_CLEAR_SKY_AB[m].B, C = ASHRAE_CLEAR_SKY_AB[m].C;
+      const sinBeta = Math.sin(altitudeDeg * DEG);
+      const dni = A * Math.exp(-B / Math.max(sinBeta, 1e-3));
+      const beamHoriz = dni * sinBeta;
+      const diffuseHoriz = C * dni;
+      return { dni: dni, diffuseHoriz: diffuseHoriz, beamHoriz: beamHoriz };
+    }
+    function irradianceOnSurface(opts) {
+      const dayOfYear = opts.dayOfYear, latitudeDeg = opts.latitudeDeg,
+        longitudeDeg = opts.longitudeDeg, stdMeridianDeg = opts.stdMeridianDeg,
+        clockHour = opts.clockHour, tiltDeg = opts.tiltDeg,
+        surfaceAzimuthDeg = opts.surfaceAzimuthDeg,
+        groundReflectance = opts.groundReflectance == null ? 0.20 : opts.groundReflectance;
+      const ast = apparentSolarTime(clockHour, dayOfYear, longitudeDeg, stdMeridianDeg);
+      const pos = solarPosition(latitudeDeg, dayOfYear, ast);
+      if (!pos.isAboveHorizon) {
+        return { direct: 0, diffuse: 0, ground: 0, total: 0, position: pos, ast: ast };
+      }
+      const irr = clearSkyIrradiance(dayOfYear, pos.altitudeDeg);
+      const cosTheta = cosIncidenceAngle(tiltDeg, surfaceAzimuthDeg, pos);
+      const Sigma = tiltDeg * DEG;
+      const F_sky = (1 + Math.cos(Sigma)) / 2;
+      const F_grd = (1 - Math.cos(Sigma)) / 2;
+      const direct = irr.dni * cosTheta;
+      const diffuse = irr.diffuseHoriz * F_sky;
+      const ghi = irr.beamHoriz + irr.diffuseHoriz;
+      const ground = ghi * groundReflectance * F_grd;
+      return { direct: direct, diffuse: diffuse, ground: ground, total: direct + diffuse + ground,
+        dni: irr.dni, cosTheta: cosTheta, position: pos, ast: ast };
+    }
+    function shgcAngleFactor(cosTheta, coeffs) {
+      const c = coeffs || [-0.0089, -0.5378, 1.5471, 0.0];
+      const x = Math.max(0, cosTheta);
+      const f = c[0] + c[1]*x + c[2]*x*x + (c[3] || 0)*x*x*x;
+      return Math.max(0, Math.min(1, f));
+    }
+    function windowSolarHeatGain(opts) {
+      const irradiance = opts.irradiance, sc = opts.sc,
+        iac = opts.iac == null ? 1.0 : opts.iac,
+        sunlitFrac = opts.sunlitFrac == null ? 1.0 : opts.sunlitFrac,
+        shgcAngularCoeffs = opts.shgcAngularCoeffs;
+      let shgcNormal = Number(opts.shgcN);
+      if (!Number.isFinite(shgcNormal)) {
+        if (Number.isFinite(sc)) shgcNormal = 0.87 * sc;
+        else shgcNormal = 0.40;
+      }
+      const direct = irradiance.direct, diffuse = irradiance.diffuse, ground = irradiance.ground;
+      const fDir = shgcAngleFactor(irradiance.cosTheta || 0, shgcAngularCoeffs);
+      const shgcDiff = 0.93 * shgcNormal;
+      const directGain = shgcNormal * fDir * direct * Math.max(0, sunlitFrac);
+      const diffuseGain = shgcDiff * (diffuse + ground);
+      return iac * (directGain + diffuseGain);
+    }
+    function solAirTemperature(opts) {
+      const tempOutC = opts.tempOutC, Et = opts.Et,
+        alpha = opts.alpha == null ? 0.7 : opts.alpha,
+        ho = opts.ho == null ? 17 : opts.ho,
+        dR = opts.dR == null ? 0 : opts.dR,
+        epsilon = opts.epsilon == null ? 1.0 : opts.epsilon;
+      return tempOutC + (alpha * Math.max(Et, 0) - epsilon * dR) / Math.max(ho, 1);
+    }
+    function overhangSunlitFraction(opts) {
+      const projection = opts.projection,
+        offsetAbove = opts.offsetAbove == null ? 0 : opts.offsetAbove,
+        windowHeight = opts.windowHeight, position = opts.position,
+        surfaceAzimuthDeg = opts.surfaceAzimuthDeg;
+      if (!position || !position.isAboveHorizon) return 0;
+      const gamma = (position.azimuthDeg - surfaceAzimuthDeg) * DEG;
+      const cosGamma = Math.cos(gamma);
+      if (cosGamma <= 0) return 1;
+      const tanProfile = Math.tan(position.altitudeRad) / cosGamma;
+      const shadow = Math.max(0, projection * tanProfile - offsetAbove);
+      const sunlit = Math.max(0, windowHeight - shadow);
+      return Math.min(1, sunlit / Math.max(windowHeight, 1e-6));
+    }
+    const solar = {
+      declinationDeg: declinationDeg, equationOfTimeMin: equationOfTimeMin,
+      apparentSolarTime: apparentSolarTime, hourAngleDeg: hourAngleDeg,
+      solarPosition: solarPosition, cosIncidenceAngle: cosIncidenceAngle,
+      relativeAirMass: relativeAirMass, clearSkyIrradiance: clearSkyIrradiance,
+      irradianceOnSurface: irradianceOnSurface, shgcAngleFactor: shgcAngleFactor,
+      windowSolarHeatGain: windowSolarHeatGain, solAirTemperature: solAirTemperature,
+      overhangSunlitFraction: overhangSunlitFraction
+    };
+    const sol = solar;
+
+    /* ---------------- Loads (ASHRAE Ch.17/18) ---------------- */
+    const PEOPLE_HEAT = {
+      seated_quiet:   { total: 100, sensible:  60, latent:  40 },
+      seated_office:  { total: 115, sensible:  65, latent:  50 },
+      seated_eating:  { total: 145, sensible:  75, latent:  70 },
+      light_industry: { total: 220, sensible: 100, latent: 120 },
+      moderate_work:  { total: 295, sensible: 130, latent: 165 },
+      heavy_work:     { total: 425, sensible: 170, latent: 255 },
+      athletic:       { total: 525, sensible: 210, latent: 315 }
+    };
+    function conductionLoad(o) {
+      return Math.max(0, o.U) * Math.max(0, o.area) * ((o.tempOutC || 0) - (o.tempInC || 0));
+    }
+    function sunExposedConductionLoad(o) {
+      const alpha = o.alpha == null ? 0.7 : o.alpha;
+      const ho = o.ho == null ? 17 : o.ho;
+      const dR = o.dR == null ? 0 : o.dR;
+      const Tsa = sol.solAirTemperature({ tempOutC: o.tempOutC, Et: o.Et, alpha: alpha, ho: ho, dR: dR });
+      return Math.max(0, o.U) * Math.max(0, o.area) * (Tsa - (o.tempInC || 0));
+    }
+    function windowLoad(o) {
+      const cond = conductionLoad({ U: o.U, area: o.area, tempOutC: o.tempOutC, tempInC: o.tempInC });
+      const solarPerM2 = sol.windowSolarHeatGain({
+        irradiance: o.irradiance, shgcN: o.shgcN, sc: o.sc,
+        iac: o.iac == null ? 1.0 : o.iac,
+        sunlitFrac: o.sunlitFrac == null ? 1.0 : o.sunlitFrac,
+        shgcAngularCoeffs: o.shgcAngularCoeffs
+      });
+      const solarW = solarPerM2 * Math.max(0, o.area);
+      return { conduction: cond, solar: solarW, total: cond + solarW };
+    }
+    function airflowFromACH(achPerHr, roomVolumeM3) {
+      return Math.max(0, achPerHr) * Math.max(0, roomVolumeM3) / 3600;
+    }
+    function airLoads(o) {
+      const P = o.pressurePa || psy.ATM_PA;
+      const flow = Math.max(0, o.airflowM3s);
+      if (flow === 0) return { sensible: 0, latent: 0, total: 0, massFlowDaKgs: 0 };
+      const W_out = psy.humidityRatioAt(o.tempOutC, o.rhOutPct, P);
+      const W_in = psy.humidityRatioAt(o.tempInC, o.rhInPct, P);
+      const v_out = psy.moistAirSpecificVolume(o.tempOutC, W_out, P);
+      const m_dot_da = flow / v_out;
+      const cp = psy.cpMoistAir(W_out);
+      const sensible = m_dot_da * cp * 1000 * ((o.tempOutC || 0) - (o.tempInC || 0));
+      const h_out = psy.moistAirEnthalpy(o.tempOutC, W_out);
+      const h_in = psy.moistAirEnthalpy(o.tempInC, W_in);
+      const total = m_dot_da * (h_out - h_in) * 1000;
+      const latent = total - sensible;
+      return { sensible: sensible, latent: latent, total: total, massFlowDaKgs: m_dot_da,
+        humidityRatioOut: W_out, humidityRatioIn: W_in };
+    }
+    function occupantLoad(o) {
+      const g = PEOPLE_HEAT[o.activity || "seated_office"] || PEOPLE_HEAT.seated_office;
+      const n = Math.max(0, o.count || 0);
+      return { sensible: n * g.sensible, latent: n * g.latent, total: n * g.total };
+    }
+    function lightingLoad(o) {
+      const lpd = o.lpd == null ? 8 : o.lpd;
+      const usage = o.usage == null ? 1.0 : o.usage;
+      const ballast = o.ballast == null ? 1.0 : o.ballast;
+      return Math.max(0, lpd) * Math.max(0, o.area) * usage * ballast;
+    }
+    function equipmentLoad(o) {
+      const usage = o.usage == null ? 0.6 : o.usage;
+      const sensFrac = o.sensFrac == null ? 1.0 : o.sensFrac;
+      let totalW;
+      if (Number.isFinite(o.kW)) { totalW = Math.max(0, o.kW) * 1000 * usage; }
+      else { totalW = Math.max(0, o.epd || 0) * Math.max(0, o.area || 0) * usage; }
+      const sens = totalW * Math.max(0, Math.min(1, sensFrac));
+      return { sensible: sens, latent: totalW - sens, total: totalW };
+    }
+    function rollupRoomLoad(o) {
+      const safetyFactor = o.safetyFactor == null ? 1.10 : o.safetyFactor;
+      let qs = 0, ql = 0;
+      for (const c of (o.components || [])) {
+        qs += Number(c.sensible) || 0;
+        ql += Number(c.latent) || 0;
+      }
+      const totalSensible = qs * safetyFactor;
+      const totalLatent = ql * safetyFactor;
+      const totalCooling = totalSensible + totalLatent;
+      return { sensibleW: totalSensible, latentW: totalLatent, totalW: totalCooling,
+        shr: totalCooling > 0 ? totalSensible / totalCooling : 1.0, safetyFactor: safetyFactor };
+    }
+    const loads = {
+      PEOPLE_HEAT: PEOPLE_HEAT, conductionLoad: conductionLoad,
+      sunExposedConductionLoad: sunExposedConductionLoad, windowLoad: windowLoad,
+      airflowFromACH: airflowFromACH, airLoads: airLoads, occupantLoad: occupantLoad,
+      lightingLoad: lightingLoad, equipmentLoad: equipmentLoad, rollupRoomLoad: rollupRoomLoad
+    };
+
+    /* ---------------- Airflow / fan / pump (ASHRAE Ch.21/22 + 90.1) --------- */
+    const CFM_TO_M3S = 0.00047194745;
+    const M3S_TO_CFM = 1 / CFM_TO_M3S;
+    const IN_TO_M = 0.0254;
+    const IN_WG_TO_PA = 248.84;
+    const AIR_DENSITY = 1.2;
+    const AIR_DYN_VISCOSITY = 1.825e-5;
+    const STEEL_ROUGHNESS_M = 0.00015;
+    function supplyAirflowForSensible(o) {
+      const P = o.pressurePa || psy.ATM_PA;
+      const supplyHumidityRatio = o.supplyHumidityRatio == null ? 0.008 : o.supplyHumidityRatio;
+      const dT = (o.roomTempC || 0) - (o.supplyTempC || 0);
+      if (dT <= 0 || o.sensibleW <= 0) return { m_dot_da: 0, m3s: 0, cfm: 0 };
+      const cp = psy.cpMoistAir(supplyHumidityRatio) * 1000;
+      const m_dot_da = o.sensibleW / (cp * dT);
+      const v = psy.moistAirSpecificVolume(o.supplyTempC, supplyHumidityRatio, P);
+      const m3s = m_dot_da * v;
+      return { m_dot_da: m_dot_da, m3s: m3s, cfm: m3s * M3S_TO_CFM, specificVolume: v };
+    }
+    function equivalentDiameterRect(widthM, heightM) {
+      const w = Math.max(widthM, 1e-6), h = Math.max(heightM, 1e-6);
+      return 1.30 * Math.pow(w * h, 0.625) / Math.pow(w + h, 0.25);
+    }
+    function reynolds(velocityMs, diameterM) {
+      return AIR_DENSITY * velocityMs * diameterM / AIR_DYN_VISCOSITY;
+    }
+    function frictionFactor(re, diameterM, roughnessM) {
+      if (re <= 0) return 0;
+      if (re < 2300) return 64 / re;
+      const eD = (roughnessM || STEEL_ROUGHNESS_M) / Math.max(diameterM, 1e-6);
+      const denom = Math.log10(eD / 3.7 + 5.74 / Math.pow(re, 0.9));
+      return 0.25 / (denom * denom);
+    }
+    function ductFrictionDropPa(o) {
+      if (o.lengthM <= 0 || o.velocityMs <= 0 || o.diameterM <= 0) return 0;
+      const re = reynolds(o.velocityMs, o.diameterM);
+      const f = frictionFactor(re, o.diameterM, o.roughnessM);
+      return f * (o.lengthM / o.diameterM) * 0.5 * AIR_DENSITY * o.velocityMs * o.velocityMs;
+    }
+    function fittingLossPa(velocityMs, kFactor) {
+      return Math.max(0, kFactor) * 0.5 * AIR_DENSITY * velocityMs * velocityMs;
+    }
+    function fanShaftKw(o) {
+      const eta = clamp(o.fanEfficiency || 0.6, 0.20, 0.92);
+      if (o.airflowM3s <= 0 || o.totalPressurePa <= 0) return 0;
+      return o.airflowM3s * o.totalPressurePa / (eta * 1000);
+    }
+    function motorElectricalKw(o) {
+      const eta = clamp(o.motorEfficiency == null ? 0.92 : o.motorEfficiency, 0.70, 0.98);
+      if (o.brakeKw <= 0) return 0;
+      return o.brakeKw / eta;
+    }
+    const STANDARD_MOTOR_KW = [0.18, 0.25, 0.37, 0.55, 0.75, 1.1, 1.5, 2.2, 3.0, 3.7, 4.0, 5.5,
+      7.5, 9.3, 11, 15, 18.5, 22, 30, 37, 45, 55, 75, 90, 110, 132, 160];
+    function selectNextMotorKw(o) {
+      const motorEfficiency = o.motorEfficiency == null ? 0.92 : o.motorEfficiency;
+      const serviceFactor = o.serviceFactor == null ? 1.15 : o.serviceFactor;
+      const need = (o.brakeKw / motorEfficiency) * serviceFactor;
+      for (const kw of STANDARD_MOTOR_KW) { if (kw >= need - 1e-6) return kw; }
+      return Math.ceil(need / 5) * 5;
+    }
+    function ashrae90_1FanPowerLimit(o) {
+      const wPerCfm = o.motorInputKw * 1000 / Math.max(o.airflowCfm, 1);
+      const limit = o.isVAV ? 1.7 : 1.1;
+      return { wPerCfm: wPerCfm, limitWPerCfm: limit, compliant: wPerCfm <= limit + 1e-6 };
+    }
+    function chilledWaterFlow(o) {
+      const deltaTC = o.deltaTC == null ? 6 : o.deltaTC;
+      const density = o.density == null ? 999 : o.density;
+      const cp = o.cp == null ? 4186 : o.cp;
+      if (o.coolingLoadW <= 0 || deltaTC <= 0) return { m3s: 0, gpm: 0, lps: 0 };
+      const m3s = o.coolingLoadW / (density * cp * deltaTC);
+      return { m3s: m3s, lps: m3s * 1000, gpm: m3s * 15850.32 };
+    }
+    function pumpShaftKw(o) {
+      const density = o.density == null ? 999 : o.density;
+      const etaPump = o.etaPump == null ? 0.70 : o.etaPump;
+      if (o.flowM3s <= 0 || o.headM <= 0) return 0;
+      const eta = clamp(etaPump, 0.25, 0.90);
+      return density * 9.80665 * o.flowM3s * o.headM / (eta * 1000);
+    }
+    const airflow = {
+      CFM_TO_M3S: CFM_TO_M3S, M3S_TO_CFM: M3S_TO_CFM, IN_TO_M: IN_TO_M,
+      IN_WG_TO_PA: IN_WG_TO_PA, AIR_DENSITY: AIR_DENSITY,
+      supplyAirflowForSensible: supplyAirflowForSensible,
+      equivalentDiameterRect: equivalentDiameterRect, reynolds: reynolds,
+      frictionFactor: frictionFactor, ductFrictionDropPa: ductFrictionDropPa,
+      fittingLossPa: fittingLossPa, fanShaftKw: fanShaftKw,
+      motorElectricalKw: motorElectricalKw, selectNextMotorKw: selectNextMotorKw,
+      STANDARD_MOTOR_KW: STANDARD_MOTOR_KW, ashrae90_1FanPowerLimit: ashrae90_1FanPowerLimit,
+      chilledWaterFlow: chilledWaterFlow, pumpShaftKw: pumpShaftKw
+    };
+
+    /* ---------------- Equipment / bin energy (ASHRAE Ch.19 + AHRI) --------- */
+    const KW_PER_TR = 3.5168525;
+    const STANDARD_TONS = [0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5, 8.5, 10,
+      12.5, 15, 20, 25, 30, 40, 50, 60, 80, 100, 125, 150, 200,
+      250, 300, 400, 500, 600, 800, 1000, 1200, 1500, 2000];
+    function selectStandardTonnage(requiredTR) {
+      if (!Number.isFinite(requiredTR) || requiredTR <= 0) return 0;
+      for (const t of STANDARD_TONS) { if (t >= requiredTR - 1e-9) return t; }
+      return Math.ceil(requiredTR / 100) * 100;
+    }
+    function coolingCop(o) {
+      const rated_temp_c = o.rated_temp_c == null ? 35 : o.rated_temp_c;
+      const kT = o.kT == null ? 0.030 : o.kT;
+      const plr = o.plr == null ? 1.0 : o.plr;
+      const minCop = o.minCop == null ? 1.5 : o.minCop;
+      const fT = Math.max(0.30, 1 - kT * (o.outdoorTempC - rated_temp_c));
+      const fPLF = 1 - 0.25 * (1 - clamp(plr, 0, 1));
+      return Math.max(minCop, o.copRated * fT * fPLF);
+    }
+    function heatingCop(o) {
+      const rated_temp_c = o.rated_temp_c == null ? 8.3 : o.rated_temp_c;
+      const kT = o.kT == null ? 0.025 : o.kT;
+      const minCop = o.minCop == null ? 1.0 : o.minCop;
+      const fT = Math.max(0.20, 1 - kT * (rated_temp_c - o.outdoorTempC));
+      const defrost = o.outdoorTempC < -5 ? 0.85 : (o.outdoorTempC < 5 ? 0.92 : 1.0);
+      return Math.max(minCop, o.copRated * fT * defrost);
+    }
+    function fanCubeLawPower(flowRatio, minRatio) {
+      const r = clamp(flowRatio, 0, 1);
+      return Math.max(minRatio == null ? 0.1 : minRatio, Math.pow(r, 2.8));
+    }
+    function balancePoint(o) {
+      if (o.UA <= 0) return o.tempInC;
+      return o.tempInC - (o.QInternalW + o.QSolarW) / o.UA;
+    }
+    function loadAtBin(o) {
+      const P = o.pressurePa || psy.ATM_PA;
+      const indoorRhPct = o.indoorRhPct == null ? 50 : o.indoorRhPct;
+      const latentEnabled = o.latentEnabled == null ? true : o.latentEnabled;
+      const sensible = o.UA * (o.outdoorTempC - o.balanceTempC);
+      if (sensible >= 0) {
+        let latent = 0;
+        if (latentEnabled && Number.isFinite(o.outdoorWetBulbC) && Number.isFinite(o.indoorTempC)) {
+          const W_in = psy.humidityRatioAt(o.indoorTempC, indoorRhPct, P);
+          const W_out_sat = psy.saturationHumidityRatio(o.outdoorWetBulbC, P);
+          const dW = Math.max(0, W_out_sat - W_in);
+          latent = Math.max(0, o.UA * 0.6 * dW * 2501);
+        }
+        return { sensible: sensible, latent: latent, total: sensible + latent, mode: "cooling" };
+      }
+      return { sensible: 0, latent: 0, total: -sensible, mode: "heating" };
+    }
+    function binEnergy(o) {
+      const isAirCooled = o.isAirCooled == null ? true : o.isAirCooled;
+      const t_ref = o.rated_temp_c != null ? o.rated_temp_c : (isAirCooled ? 35 : 29);
+      const k = o.kT != null ? o.kT : (isAirCooled ? 0.030 : 0.022);
+      const T_b = balancePoint({ tempInC: o.indoorTempC, QInternalW: o.QInternalW, QSolarW: o.QSolarW, UA: o.UA });
+      let peakCoolingW = 0;
+      for (const b of o.bins || []) {
+        if (b.tempC > T_b) { const Q = o.UA * (b.tempC - T_b); if (Q > peakCoolingW) peakCoolingW = Q; }
+      }
+      const capacityW = peakCoolingW * 1.10;
+      let totalHours = 0, totalCoolingKwh = 0, totalChillerKwh = 0, totalFanKwh = 0,
+        totalProcessFanKwh = 0, totalLatentKwh = 0;
+      for (const b of o.bins || []) {
+        const h = Math.max(0, b.hours || 0);
+        totalHours += h;
+        const load = loadAtBin({ outdoorTempC: b.tempC, balanceTempC: T_b, UA: o.UA,
+          outdoorWetBulbC: b.wetBulbC, indoorTempC: o.indoorTempC, indoorRhPct: 50, pressurePa: o.pressurePa });
+        if (load.mode !== "cooling") continue;
+        const plr = capacityW > 0 ? Math.min(1, load.total / capacityW) : 0;
+        if (plr <= 0) continue;
+        const cop = coolingCop({ copRated: o.copRated, outdoorTempC: b.tempC, rated_temp_c: t_ref, kT: k, plr: plr });
+        const compressorKw = (load.total / 1000) / cop;
+        totalChillerKwh += compressorKw * h;
+        const fanRatio = airflow ? Math.pow(Math.max(plr, 0.4), 1.0) : plr;
+        const fanKw = (o.fanPeakKw || 0) * fanCubeLawPower(fanRatio);
+        totalFanKwh += fanKw * h;
+        totalProcessFanKwh += (o.processFanPeakKw || 0) * h;
+        totalCoolingKwh += (load.total / 1000) * h;
+        totalLatentKwh += (load.latent / 1000) * h;
+      }
+      const electricalKwh = totalChillerKwh + totalFanKwh + totalProcessFanKwh;
+      return { balanceTempC: T_b, capacityW: capacityW, binHoursTotal: totalHours,
+        coolingDeliveredKwh: totalCoolingKwh, latentDeliveredKwh: totalLatentKwh,
+        chillerElectricalKwh: totalChillerKwh, fanElectricalKwh: totalFanKwh,
+        processFanElectricalKwh: totalProcessFanKwh, totalElectricalKwh: electricalKwh,
+        seasonalCop: totalChillerKwh > 0 ? totalCoolingKwh / totalChillerKwh : 0 };
+    }
+    function tariffCost(o) {
+      if (o.slots && o.slots.length) {
+        let total = 0;
+        for (const s of o.slots) {
+          total += (s.kwh || 0) * (s.ratePerKwh || 0);
+          if (s.demandKw && s.demandRate) total += s.demandKw * s.demandRate;
+        }
+        return total;
+      }
+      const energyCost = (o.kwh || 0) * (o.ratePerKwh || 0);
+      const demandCost = (o.demandKw || 0) * (o.demandRate || 0) * 12;
+      return energyCost + demandCost;
+    }
+
+    /* --- Priority #4: real catalog selection with design-condition de-rating ---
+     * Rounding the design TR up to the next catalog size ignores that a unit's
+     * capacity FALLS at high outdoor temperature. A 5 TR nominal air-cooled unit
+     * only delivers ~4.5 TR at 46 °C. selectEquipment de-rates each catalog
+     * unit at the DESIGN outdoor temperature and picks the smallest whose
+     * CORRECTED capacity still covers the load — the correct engineering basis.
+     */
+    const EQUIPMENT_CATALOG = {
+      split_dx: [
+        { model: "DX-1.0", nominalTR: 1.0, ratedCop: 3.2 }, { model: "DX-1.5", nominalTR: 1.5, ratedCop: 3.2 },
+        { model: "DX-2.0", nominalTR: 2.0, ratedCop: 3.3 }, { model: "DX-3.0", nominalTR: 3.0, ratedCop: 3.3 },
+        { model: "DX-4.0", nominalTR: 4.0, ratedCop: 3.4 }, { model: "DX-5.0", nominalTR: 5.0, ratedCop: 3.4 },
+        { model: "DX-8.5", nominalTR: 8.5, ratedCop: 3.3 }, { model: "DX-11", nominalTR: 11, ratedCop: 3.2 }
+      ],
+      vrf: [
+        { model: "VRF-4", nominalTR: 4, ratedCop: 3.9 }, { model: "VRF-6", nominalTR: 6, ratedCop: 3.9 },
+        { model: "VRF-8", nominalTR: 8, ratedCop: 4.0 }, { model: "VRF-10", nominalTR: 10, ratedCop: 4.0 },
+        { model: "VRF-12", nominalTR: 12, ratedCop: 3.9 }, { model: "VRF-16", nominalTR: 16, ratedCop: 3.8 },
+        { model: "VRF-20", nominalTR: 20, ratedCop: 3.8 }, { model: "VRF-24", nominalTR: 24, ratedCop: 3.7 }
+      ],
+      chiller_ahu: [
+        { model: "CH-20", nominalTR: 20, ratedCop: 5.2 }, { model: "CH-30", nominalTR: 30, ratedCop: 5.4 },
+        { model: "CH-40", nominalTR: 40, ratedCop: 5.6 }, { model: "CH-60", nominalTR: 60, ratedCop: 5.8 },
+        { model: "CH-80", nominalTR: 80, ratedCop: 5.9 }, { model: "CH-100", nominalTR: 100, ratedCop: 6.0 },
+        { model: "CH-150", nominalTR: 150, ratedCop: 6.0 }, { model: "CH-200", nominalTR: 200, ratedCop: 6.1 }
+      ]
+    };
+    function equipmentFamily(systemType) {
+      const s = String(systemType || "vrf");
+      if (EQUIPMENT_CATALOG[s]) return s;
+      if (s === "vav" || s === "central_ahu") return "chiller_ahu";
+      return "vrf";
+    }
+    // Capacity multiplier at outdoor temperature. Air-cooled DX/VRF lose ~0.8 %/K
+    // above the 35 °C AHRI rating; water-cooled chillers are far less sensitive.
+    function capacityDeratingFactor(outdoorTempC, systemType) {
+      const fam = equipmentFamily(systemType);
+      const k = fam === "chiller_ahu" ? 0.004 : 0.008;
+      return Math.max(0.6, 1 - k * Math.max(0, (outdoorTempC == null ? 35 : outdoorTempC) - 35));
+    }
+    function selectEquipment(o) {
+      const requiredTR = Math.max(0, o.requiredTR || 0);
+      const fam = equipmentFamily(o.systemType);
+      const list = EQUIPMENT_CATALOG[fam];
+      const derate = capacityDeratingFactor(o.outdoorTempC, o.systemType);
+      const designCop = coolingCop({ copRated: 0, outdoorTempC: (o.outdoorTempC == null ? 35 : o.outdoorTempC),
+        rated_temp_c: 35, kT: fam === "chiller_ahu" ? 0.020 : 0.030, plr: 1.0, minCop: 0 });
+      function pack(unit, quantity) {
+        const correctedTR = unit.nominalTR * derate * quantity;
+        return {
+          model: quantity > 1 ? (unit.model + " x" + quantity) : unit.model,
+          systemFamily: fam, quantity: quantity,
+          nominalTR: Number((unit.nominalTR * quantity).toFixed(2)),
+          correctedTR: Number(correctedTR.toFixed(2)),
+          deratingFactor: Number(derate.toFixed(3)),
+          oversizePct: requiredTR > 0 ? Number((100 * (correctedTR - requiredTR) / requiredTR).toFixed(1)) : 0,
+          ratedCop: unit.ratedCop,
+          designCop: Number((unit.ratedCop * (designCop || 1)).toFixed(2)),
+          meetsLoad: correctedTR >= requiredTR - 1e-9
+        };
+      }
+      for (const unit of list) {
+        if (unit.nominalTR * derate >= requiredTR - 1e-9) return pack(unit, 1);
+      }
+      const largest = list[list.length - 1];
+      const qty = Math.max(1, Math.ceil(requiredTR / Math.max(largest.nominalTR * derate, 0.1)));
+      return pack(largest, qty);
+    }
+
+    /* --- Priority #5: coil apparatus dew point + bypass factor ---
+     * The room sensible/latent split defines a process line; where that line
+     * (extended from the room condition) meets the saturation curve is the coil
+     * apparatus dew point (ADP). The bypass factor sets the leaving-air temp.
+     * This validates that a coil can actually deliver the required SHR and
+     * gives ADP/BF for coil selection, instead of assuming a fixed supply temp.
+     */
+    function coilApparatusDewPoint(roomTempC, roomW, shr, pressurePa) {
+      const P = pressurePa || ATM_PA;
+      const hr = moistAirEnthalpy(roomTempC, roomW);
+      const target = clamp(shr, 0.05, 1);
+      function shrLineAt(Tadp) {
+        const Wadp = saturationHumidityRatio(Tadp, P);
+        const hadp = moistAirEnthalpy(Tadp, Wadp);
+        const dh = hr - hadp;
+        if (dh <= 1e-6) return 1;
+        return clamp(1.006 * (roomTempC - Tadp) / dh, 0, 1);
+      }
+      let a = -20, b = roomTempC - 0.1;
+      let fa = shrLineAt(a) - target;
+      let fb = shrLineAt(b) - target;
+      let Tadp;
+      if (fa === 0) { Tadp = a; }
+      else if (fb === 0) { Tadp = b; }
+      else if (fa * fb > 0) {
+        // No sign change in range: SHR unachievable by a standard coil; clamp.
+        Tadp = Math.abs(fa) < Math.abs(fb) ? a : b;
+      } else {
+        for (let i = 0; i < 80; i++) {
+          const mid = (a + b) / 2;
+          const fm = shrLineAt(mid) - target;
+          if (fa * fm <= 0) { b = mid; fb = fm; } else { a = mid; fa = fm; }
+          if (b - a < 1e-4) break;
+        }
+        Tadp = (a + b) / 2;
+      }
+      const Wadp = saturationHumidityRatio(Tadp, P);
+      return { adpC: Tadp, adpW: Wadp, adpEnthalpy: moistAirEnthalpy(Tadp, Wadp) };
+    }
+    function coilProcess(o) {
+      const P = o.pressurePa || ATM_PA;
+      const roomW = psy.humidityRatioAt(o.roomTempC, o.roomRhPct, P);
+      const adp = coilApparatusDewPoint(o.roomTempC, roomW, o.shr, P);
+      const supplyT = o.supplyTempC == null ? 13 : o.supplyTempC;
+      const denom = o.roomTempC - adp.adpC;
+      const bf = denom > 0.1 ? clamp((supplyT - adp.adpC) / denom, 0, 1) : 0.1;
+      return {
+        adpC: Number(adp.adpC.toFixed(2)),
+        adpDewPointW: Number(adp.adpW.toFixed(5)),
+        bypassFactor: Number(bf.toFixed(3)),
+        supplyTempC: supplyT,
+        achievable: adp.adpC > 1.5, // ADP below ~1.5 °C risks coil freeze / infeasible SHR
+        shr: Number(clamp(o.shr, 0, 1).toFixed(3))
+      };
+    }
+
+    const equipment = {
+      KW_PER_TR: KW_PER_TR, STANDARD_TONS: STANDARD_TONS,
+      selectStandardTonnage: selectStandardTonnage, coolingCop: coolingCop,
+      heatingCop: heatingCop, fanCubeLawPower: fanCubeLawPower, balancePoint: balancePoint,
+      loadAtBin: loadAtBin, binEnergy: binEnergy, tariffCost: tariffCost,
+      EQUIPMENT_CATALOG: EQUIPMENT_CATALOG, capacityDeratingFactor: capacityDeratingFactor,
+      selectEquipment: selectEquipment, coilApparatusDewPoint: coilApparatusDewPoint, coilProcess: coilProcess
+    };
+    const af = airflow;
+    const eq = equipment;
+
+    /* ---------------- Full-design generator ---------------- */
+    function num(v, d) { const x = Number(v); return Number.isFinite(x) ? x : d; }
+    function designRoom(room, climate) {
+      const setpoint = num(room.setpointC, 24);
+      const setpointRh = num(room.setpointRhPct, 50);
+      const elev = num(climate.elevationM, 0);
+      const P = psy.pressureAtElevation(elev);
+      const T_out = num(climate.designOutdoorDbC, 35);
+      const T_wb = num(climate.designOutdoorWbC, 25);
+      const RH_out = Math.min(100, Math.max(0,
+        Number.isFinite(climate.designOutdoorRhPct)
+          ? climate.designOutdoorRhPct
+          : 100 * psy.saturationPressurePa(T_wb) / psy.saturationPressurePa(T_out)));
+      const day = num(climate.designDayOfYear, 172);
+      const lat = num(climate.latitudeDeg, 19);
+      const lon = num(climate.longitudeDeg, 73);
+      const stdM = num(climate.stdMeridianDeg, 82.5);
+      const orientationAzimuth = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
+
+      // ---- Constant (hour-independent) loads: fabric UA, internal, air-side ----
+      const constComponents = [];
+      let UA = 0;
+      for (const w of (room.walls || [])) { UA += (w.U || 0) * (w.area || 0); }
+      if (room.roof && room.roof.area) { UA += (room.roof.U || 0) * room.roof.area; }
+      for (const win of (room.windows || [])) { UA += (win.U || 0) * (win.area || 0); }
+      if (room.floor && room.floor.area) {
+        UA += (room.floor.U || 0) * room.floor.area;
+        const T_below = num(room.floor.tempBelowC, 20);
+        const q = loads.conductionLoad({ U: room.floor.U, area: room.floor.area, tempOutC: T_below, tempInC: setpoint });
+        constComponents.push({ kind: "floor", sensible: q, latent: 0 });
+      }
+      const peopleLoad = loads.occupantLoad({ activity: room.activity || "seated_office", count: num(room.occupants, 0) });
+      constComponents.push({ kind: "people", sensible: peopleLoad.sensible, latent: peopleLoad.latent });
+      const lightW = loads.lightingLoad({ lpd: num(room.lpd, 10), area: num(room.areaM2, 0),
+        usage: num(room.lightingUsage, 1.0), ballast: num(room.lightingBallast, 1.0) });
+      constComponents.push({ kind: "lighting", sensible: lightW, latent: 0 });
+      const equipLoad = loads.equipmentLoad({ epd: num(room.epd, 8), area: num(room.areaM2, 0),
+        usage: num(room.equipmentUsage, 0.7), sensFrac: num(room.equipmentSensibleFrac, 1.0) });
+      constComponents.push({ kind: "equipment", sensible: equipLoad.sensible, latent: equipLoad.latent });
+      const volumeM3 = num(room.areaM2, 0) * num(room.ceilingHeightM, 3);
+      const infilM3s = loads.airflowFromACH(num(room.infiltrationAch, 0.4), volumeM3);
+      const infil = loads.airLoads({ airflowM3s: infilM3s, tempOutC: T_out, tempInC: setpoint,
+        rhOutPct: RH_out, rhInPct: setpointRh, pressurePa: P });
+      constComponents.push({ kind: "infiltration", sensible: infil.sensible, latent: infil.latent });
+      const cfmPerPerson = num(room.ventilationCfmPerPerson, 5);
+      const cfmPerM2 = num(room.ventilationCfmPerM2, 0.6);
+      const ventCfm = cfmPerPerson * num(room.occupants, 0) + cfmPerM2 * num(room.areaM2, 0);
+      const ventM3s = ventCfm * af.CFM_TO_M3S;
+      const vent = loads.airLoads({ airflowM3s: ventM3s, tempOutC: T_out, tempInC: setpoint,
+        rhOutPct: RH_out, rhInPct: setpointRh, pressurePa: P });
+      constComponents.push({ kind: "ventilation", sensible: vent.sensible, latent: vent.latent });
+      let constS = 0, constL = 0;
+      for (const c of constComponents) { constS += c.sensible || 0; constL += c.latent || 0; }
+
+      // ---- Solar-driven (hour-dependent) fabric loads ----
+      function solarComponentsAt(hour) {
+        const comps = [];
+        for (const w of (room.walls || [])) {
+          const ori = orientationAzimuth[String(w.orientation || "S").toUpperCase()];
+          const az = Number.isFinite(ori) ? ori : 180;
+          const irr = solar.irradianceOnSurface({ dayOfYear: day, latitudeDeg: lat, longitudeDeg: lon,
+            stdMeridianDeg: stdM, clockHour: hour, tiltDeg: 90, surfaceAzimuthDeg: az });
+          const q = loads.sunExposedConductionLoad({ U: w.U, area: w.area, tempInC: setpoint, tempOutC: T_out,
+            Et: irr.total, alpha: num(w.alpha, 0.7), ho: num(w.ho, 17), dR: 0 });
+          comps.push({ kind: "wall_" + (w.orientation || "S"), sensible: q, latent: 0 });
+        }
+        if (room.roof && room.roof.area) {
+          const irr = solar.irradianceOnSurface({ dayOfYear: day, latitudeDeg: lat, longitudeDeg: lon,
+            stdMeridianDeg: stdM, clockHour: hour, tiltDeg: 0, surfaceAzimuthDeg: 180 });
+          const q = loads.sunExposedConductionLoad({ U: room.roof.U, area: room.roof.area, tempInC: setpoint,
+            tempOutC: T_out, Et: irr.total, alpha: num(room.roof.alpha, 0.85), ho: num(room.roof.ho, 17), dR: num(room.roof.dR, 63) });
+          comps.push({ kind: "roof", sensible: q, latent: 0 });
+        }
+        for (const win of (room.windows || [])) {
+          const ori = orientationAzimuth[String(win.orientation || "S").toUpperCase()];
+          const az = Number.isFinite(ori) ? ori : 180;
+          const irr = solar.irradianceOnSurface({ dayOfYear: day, latitudeDeg: lat, longitudeDeg: lon,
+            stdMeridianDeg: stdM, clockHour: hour, tiltDeg: num(win.tiltDeg, 90), surfaceAzimuthDeg: az });
+          const result = loads.windowLoad({ irradiance: irr, U: win.U, area: win.area, tempOutC: T_out, tempInC: setpoint,
+            shgcN: win.shgcN, sc: win.sc, iac: num(win.iac, 1.0), sunlitFrac: num(win.sunlitFrac, 1.0) });
+          comps.push({ kind: "window_" + (win.orientation || "S"), sensible: result.total, latent: 0 });
+        }
+        return comps;
+      }
+      function solarSensibleAt(hour) {
+        let s = 0;
+        const comps = solarComponentsAt(hour);
+        for (const c of comps) { s += c.sensible || 0; }
+        return s;
+      }
+
+      // ---- Design-day sweep: find the clock hour of the TRUE peak cooling ----
+      // Instead of assuming a single design hour (e.g. 15:00), the load is
+      // evaluated across the daylight hours and the peak-total hour is used.
+      // A west-glazed room peaks in late afternoon, an east-glazed room in the
+      // morning — this captures each automatically. Non-solar loads are
+      // hour-independent (constant design outdoor state), so the peak is set by
+      // the sum of the orientation-resolved solar/sol-air loads.
+      const sweep = climate.sweepDesignDay !== false;
+      const hStart = num(climate.designHourStart, 6);
+      const hEnd = num(climate.designHourEnd, 20);
+      const hStep = Math.max(0.5, num(climate.designHourStep, 1));
+      const fixedHour = num(climate.designClockHour, 15);
+      const hourList = [];
+      if (sweep) { for (let h = hStart; h <= hEnd + 1e-9; h += hStep) hourList.push(Number(h.toFixed(2))); }
+      if (!hourList.length) hourList.push(fixedHour);
+      const hourly = [];
+      let peakHour = hourList[0];
+      let peakSolarS = -Infinity;
+      for (const h of hourList) {
+        const s = solarSensibleAt(h);
+        hourly.push({ hour: h, sensibleW: Math.round(constS + s), totalW: Math.round(constS + s + constL) });
+        if (s > peakSolarS) { peakSolarS = s; peakHour = h; }
+      }
+
+      // ---- Assemble the room design at the peak hour ----
+      const components = solarComponentsAt(peakHour).concat(constComponents);
+      const rollup = loads.rollupRoomLoad({ components: components, safetyFactor: num(room.safetyFactor, 1.10) });
+      const W_out = psy.humidityRatioAt(T_out, RH_out, P);
+      const v_out = psy.moistAirSpecificVolume(T_out, W_out, P);
+      const m_dot_oa = (infilM3s + ventM3s) / Math.max(v_out, 0.1);
+      UA = UA + m_dot_oa * 1006;
+      const supplyAir = af.supplyAirflowForSensible({ sensibleW: rollup.sensibleW,
+        supplyTempC: num(room.supplyTempC, 13), roomTempC: setpoint, pressurePa: P });
+      const designTR = rollup.totalW / (eq.KW_PER_TR * 1000);
+      const standardTR = eq.selectStandardTonnage(designTR);
+      // Priority #5: coil apparatus dew point / bypass factor from the room SHR.
+      const coil = eq.coilProcess({
+        roomTempC: setpoint, roomRhPct: setpointRh, shr: rollup.shr,
+        supplyTempC: num(room.supplyTempC, 13), pressurePa: P
+      });
+      return {
+        room: room.name || "room",
+        components: components.map(function (c) {
+          return { kind: c.kind, sensibleW: Math.round(c.sensible), latentW: Math.round(c.latent || 0) };
+        }),
+        roomLoad: { sensibleW: Math.round(rollup.sensibleW), latentW: Math.round(rollup.latentW),
+          totalW: Math.round(rollup.totalW), shr: Number(rollup.shr.toFixed(3)), safetyFactor: rollup.safetyFactor },
+        designTR: Number(designTR.toFixed(2)), selectedTR: standardTR, UA_W_per_K: Math.round(UA),
+        supplyAir: { cfm: Math.round(supplyAir.cfm), m3s: Number(supplyAir.m3s.toFixed(3)), supplyTempC: num(room.supplyTempC, 13) },
+        coil: coil,
+        peakHour: peakHour, designDaySwept: sweep, hourly: hourly,
+        psychrometric: { outdoorDbC: T_out, outdoorWbC: T_wb, outdoorWPerKg: Number(W_out.toFixed(4)),
+          indoorDbC: setpoint, indoorRhPct: setpointRh }
+      };
+    }
+    function designProject(project) {
+      const rooms = (project.rooms || []).map(function (r) { return designRoom(r, project.climate || {}); });
+      const totalLoadW = rooms.reduce(function (a, r) { return a + r.roomLoad.totalW; }, 0);
+      const totalSensibleW = rooms.reduce(function (a, r) { return a + r.roomLoad.sensibleW; }, 0);
+      const totalLatentW = rooms.reduce(function (a, r) { return a + r.roomLoad.latentW; }, 0);
+      const totalCfm = rooms.reduce(function (a, r) { return a + r.supplyAir.cfm; }, 0);
+      const designTR = totalLoadW / (eq.KW_PER_TR * 1000);
+
+      // ---- Coincident (block) peak across the design day ----
+      // Summing each room's *own* peak-hour load over-sizes a central plant
+      // because rooms peak at different hours. The true central load is the
+      // block peak: the hour that maximises the SUM of all rooms' loads. The
+      // coincidence factor derived from the sweep replaces the old flat 0.85
+      // diversity assumption (still overridable via designIntent.diversityFactor).
+      let sumOfRoomPeaksPre = 0;
+      for (const r of rooms) {
+        let rp = 0;
+        for (const hp of (r.hourly || [])) { if (hp.totalW > rp) rp = hp.totalW; }
+        sumOfRoomPeaksPre += rp;
+      }
+      const hoursLen = (rooms[0] && rooms[0].hourly) ? rooms[0].hourly.length : 0;
+      let blockPeakPre = 0, blockPeakHour = null;
+      for (let i = 0; i < hoursLen; i++) {
+        let s = 0;
+        for (const r of rooms) { s += (r.hourly && r.hourly[i]) ? r.hourly[i].totalW : 0; }
+        if (s > blockPeakPre) { blockPeakPre = s; blockPeakHour = rooms[0].hourly[i].hour; }
+      }
+      const coincidenceFactor = sumOfRoomPeaksPre > 0 ? blockPeakPre / sumOfRoomPeaksPre : 1;
+      const explicitDiv = (project.designIntent || {}).diversityFactor;
+      const diversity = Number.isFinite(explicitDiv)
+        ? explicitDiv
+        : (rooms.length > 1 ? Number(coincidenceFactor.toFixed(3)) : 1.0);
+      const diversifiedLoadW = totalLoadW * diversity;
+      const diversifiedTR = diversifiedLoadW / (eq.KW_PER_TR * 1000);
+      const selectedTR = eq.selectStandardTonnage(diversifiedTR);
+      const intent = project.designIntent || {};
+      // Priority #4: catalog selection de-rated at the design outdoor temperature.
+      const equipmentSelection = eq.selectEquipment({
+        requiredTR: diversifiedTR,
+        outdoorTempC: num((project.climate || {}).designOutdoorDbC, 35),
+        systemType: intent.systemType || "vrf"
+      });
+      // Priority #5: system coil rollup (worst-case ADP, highest BF across zones).
+      const coilRollup = (function () {
+        let minAdp = Infinity, maxBf = 0, achievable = true, worstShr = 1;
+        for (const r of rooms) {
+          if (!r.coil) continue;
+          if (r.coil.adpC < minAdp) minAdp = r.coil.adpC;
+          if (r.coil.bypassFactor > maxBf) maxBf = r.coil.bypassFactor;
+          if (r.coil.shr < worstShr) worstShr = r.coil.shr;
+          if (!r.coil.achievable) achievable = false;
+        }
+        return rooms.length ? {
+          designAdpC: Number((minAdp === Infinity ? 0 : minAdp).toFixed(2)),
+          maxBypassFactor: Number(maxBf.toFixed(3)),
+          lowestRoomShr: Number(worstShr.toFixed(3)),
+          allZonesAchievable: achievable
+        } : null;
+      })();
+      const externalSpPa = num(intent.externalSpPa, 500);
+      const fanEta = num(intent.fanEfficiency, 0.65);
+      const motorEta = num(intent.motorEfficiency, 0.92);
+      const airflowM3s = totalCfm * af.CFM_TO_M3S;
+      const brake = af.fanShaftKw({ airflowM3s: airflowM3s, totalPressurePa: externalSpPa, fanEfficiency: fanEta });
+      const motorKwInput = af.motorElectricalKw({ brakeKw: brake, motorEfficiency: motorEta });
+      const selectedMotorKw = af.selectNextMotorKw({ brakeKw: brake, motorEfficiency: motorEta, serviceFactor: 1.15 });
+      const fanLimit = af.ashrae90_1FanPowerLimit({ airflowCfm: totalCfm, motorInputKw: motorKwInput,
+        isVAV: String(intent.systemType || "") === "vav" });
+      const isWater = ["chiller_ahu", "vav", "central_ahu"].indexOf(String(intent.systemType || "")) >= 0;
+      let pump = null;
+      if (isWater) {
+        const flow = af.chilledWaterFlow({ coolingLoadW: diversifiedLoadW, deltaTC: num(intent.coilDeltaTC, 6) });
+        const head = num(intent.pumpHeadM, 25);
+        const pumpKw = af.pumpShaftKw({ flowM3s: flow.m3s, headM: head, etaPump: num(intent.pumpEfficiency, 0.70) });
+        pump = { flowLps: Number(flow.lps.toFixed(2)), flowGpm: Math.round(flow.gpm), headM: head,
+          shaftKw: Number(pumpKw.toFixed(2)),
+          electricalKw: Number(af.motorElectricalKw({ brakeKw: pumpKw, motorEfficiency: motorEta }).toFixed(2)) };
+      }
+      return {
+        projectName: project.name || "Project", systemType: intent.systemType || "vrf", rooms: rooms,
+        aggregate: { diversityFactor: diversity, totalSensibleW: Math.round(totalSensibleW),
+          totalLatentW: Math.round(totalLatentW), totalLoadW: Math.round(totalLoadW),
+          diversifiedLoadW: Math.round(diversifiedLoadW), designTR: Number(designTR.toFixed(2)),
+          diversifiedTR: Number(diversifiedTR.toFixed(2)), selectedTR: selectedTR,
+          totalCfm: Math.round(totalCfm), totalM3s: Number(airflowM3s.toFixed(3)),
+          designDaySwept: rooms.some(function (r) { return r.designDaySwept; }),
+          blockPeakHour: blockPeakHour,
+          coincidenceFactor: Number(coincidenceFactor.toFixed(3)),
+          sumOfRoomPeaksW: Math.round(sumOfRoomPeaksPre),
+          blockPeakW: Math.round(blockPeakPre),
+          roomPeakHours: rooms.map(function (r) { return { room: r.room, peakHour: r.peakHour }; }) },
+        fan: { externalSpPa: externalSpPa, fanEfficiency: fanEta, shaftKw: Number(brake.toFixed(2)),
+          motorInputKw: Number(motorKwInput.toFixed(2)), selectedMotorKw: selectedMotorKw,
+          wPerCfm: Number(fanLimit.wPerCfm.toFixed(2)), ashrae90_1Limit: fanLimit.limitWPerCfm,
+          ashrae90_1Compliant: fanLimit.compliant },
+        equipmentSelection: equipmentSelection,
+        coil: coilRollup,
+        pump: pump, generatedAt: new Date().toISOString(), engineVersion: "1.0.0"
+      };
+    }
+    function designAlternatives(project) {
+      const intent = project.designIntent || {};
+      const variants = [
+        { key: "cost_effective", label: "Cost-effective",
+          patch: { systemType: "split_dx", externalSpPa: 350, fanEfficiency: 0.55 } },
+        { key: "balanced", label: "Balanced",
+          patch: { systemType: "vrf", externalSpPa: 500, fanEfficiency: 0.65 } },
+        { key: "efficient", label: "High-efficiency",
+          patch: { systemType: "chiller_ahu", externalSpPa: 600, fanEfficiency: 0.72, pumpEfficiency: 0.78, coilDeltaTC: 7 } }
+      ];
+      const options = variants.map(function (v) {
+        const variantProject = Object.assign({}, project, { designIntent: Object.assign({}, intent, v.patch) });
+        const design = designProject(variantProject);
+        const oversize = design.aggregate.selectedTR > 0
+          ? Math.abs(design.aggregate.selectedTR - design.aggregate.diversifiedTR) / design.aggregate.selectedTR : 1;
+        const score = 100 - 25 * Math.min(1, design.fan.wPerCfm / (design.fan.ashrae90_1Limit || 1.1))
+          - 30 * oversize - 10 * (design.fan.ashrae90_1Compliant ? 0 : 1);
+        return { key: v.key, label: v.label, design: design, score: Math.max(0, Math.round(score)) };
+      });
+      options.sort(function (a, b) { return b.score - a.score; });
+      return { preferredKey: options[0] ? options[0].key : null, options: options };
+    }
+    function autoFix(project, constraints) {
+      constraints = constraints || {};
+      const log = [];
+      const maxIter = 8;
+      const intent = Object.assign({}, project.designIntent || {});
+      let current = Object.assign({}, project, { designIntent: intent });
+      for (let i = 0; i < maxIter; i++) {
+        const design = designProject(current);
+        const fails = [];
+        if (constraints.maxFanWPerCfm && design.fan.wPerCfm > constraints.maxFanWPerCfm) {
+          fails.push("fanWPerCfm");
+          intent.fanEfficiency = Math.min(0.78, num(intent.fanEfficiency, 0.65) + 0.04);
+          if (num(intent.externalSpPa, 500) > 350) { intent.externalSpPa = num(intent.externalSpPa, 500) - 50; }
+        }
+        if (constraints.maxTROversizingPct) {
+          const over = (design.aggregate.selectedTR - design.aggregate.diversifiedTR) / Math.max(design.aggregate.diversifiedTR, 1) * 100;
+          if (over > constraints.maxTROversizingPct) {
+            fails.push("oversizing");
+            intent.diversityFactor = Math.max(0.7, num(intent.diversityFactor, 0.85) - 0.05);
+          }
+        }
+        log.push({ iter: i, fails: fails, intent: Object.assign({}, intent) });
+        if (fails.length === 0) { return { success: true, iterations: i + 1, design: design, log: log }; }
+        current = Object.assign({}, project, { designIntent: intent });
+      }
+      return { success: false, iterations: maxIter, design: designProject(current), log: log };
+    }
+    const designer = {
+      designRoom: designRoom, designProject: designProject,
+      designAlternatives: designAlternatives, autoFix: autoFix
+    };
+
+    return {
+      psy: psy, psychrometrics: psy, solar: solar, loads: loads, airflow: airflow,
+      equipment: equipment, designer: designer, version: "1.0.0",
+      saturationPressurePa: psy.saturationPressurePa, moistAirEnthalpy: psy.moistAirEnthalpy,
+      humidityRatioAt: psy.humidityRatioAt, wetBulbTemp: psy.wetBulbTemp, dewPointTemp: psy.dewPointTemp
+    };
+  })();
+
   return {
+    ashrae: ashrae,
+    designRoom: ashrae.designer.designRoom,
+    designProject: ashrae.designer.designProject,
+    designAlternatives: ashrae.designer.designAlternatives,
+    autoFix: ashrae.designer.autoFix,
     CFM_TO_M3S: CFM_TO_M3S,
     DEFAULT_FITTING_DATABASE: DEFAULT_FITTING_DATABASE,
     clamp: clamp,
